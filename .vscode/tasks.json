@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "shell",
+      "label": "Debug Build",
+      "command": "${workspaceFolder}/scripts/build-debug.sh"
+    },
+    {
+      "type": "shell",
+      "label": "Release Build",
+      "command": "${workspaceFolder}/scripts/build-release.sh"
+    }
+  ]
+}
