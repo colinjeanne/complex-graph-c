@@ -12,6 +12,19 @@
         "settings set target.disable-aslr false"
       ],
       "preLaunchTask": "Debug Build",
+    },
+    {
+      "name": "(lldb) Launch Tests",
+      "type": "lldb-dap",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/debug/complex-graph-test",
+      "args": [],
+      "cwd": "${fileDirname}",
+      "disableASLR": false,
+      "initCommands": [
+        "settings set target.disable-aslr false"
+      ],
+      "preLaunchTask": "Debug Build",
     }
   ],
   "version": "2.0.0"
