@@ -9,6 +9,7 @@ set_property(TARGET complex-graph PROPERTY COMPILE_WARNING_AS_ERROR ON)
 target_sources(complex-graph
   PRIVATE
     src/main.c
+    src/deque.c
     src/expression.c
 )
 
@@ -19,6 +20,7 @@ set_property(TARGET complex-graph-test PROPERTY COMPILE_WARNING_AS_ERROR ON)
 target_sources(complex-graph-test
   PRIVATE
     test/main.c
+    src/deque.c
     src/expression.c
 )
 
