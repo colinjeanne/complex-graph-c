@@ -28,11 +28,11 @@ int run_test_case(struct test_case c) {
 
   struct parse_result result = make_expression(c.expression_str, &ex);
   if (result.type != c.type) {
-    printf("Expected error type %d received %d", c.type, result.type);
+    printf("Expected error type %d received %d\n", c.type, result.type);
     success = -1;
     goto cleanup;
   } else if (result.index != c.index) {
-    printf("Expected error index %lu received %lu", c.index, result.index);
+    printf("Expected error index %lu received %lu\n", c.index, result.index);
     success = -1;
     goto cleanup;
   }
@@ -41,7 +41,7 @@ int run_test_case(struct test_case c) {
     double _Complex value = evaluate_expression(ex);
     if (!are_equal(value, c.value)) {
       printf(
-        "Expected value (%f, %f) received (%f, %f)",
+        "Expected value (%f, %f) received (%f, %f)\n",
         creal(c.value),
         cimag(c.value),
         creal(value),
@@ -74,14 +74,21 @@ int main(void) {
     { ".5", PARSE_ERROR_SUCCESS, 0, 0.5 },
     { ".0", PARSE_ERROR_SUCCESS, 0, 0 },
     { ".005", PARSE_ERROR_SUCCESS, 0, 0.005 },
-    { "0.0", PARSE_ERROR_SUCCESS, 0, 0 },
+    { "1.1", PARSE_ERROR_SUCCESS, 0, 1.1 },
     { "1.0", PARSE_ERROR_SUCCESS, 0, 1 },
     { "10.00", PARSE_ERROR_SUCCESS, 0, 10 },
     { "10.05", PARSE_ERROR_SUCCESS, 0, 10.05 },
     { ".", PARSE_ERROR_EXPECTED_DIGIT, 1, 0 },
     { ".0.", PARSE_ERROR_EXPECTED_DIGIT, 3, 0 },
     { ".0.0", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 },
-    { "1 1", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 }
+    { "1 1", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 },
+    { "1+2", PARSE_ERROR_SUCCESS, 0, 3 },
+    { "1+", PARSE_ERROR_INCOMPLETE_EXPRESSION, 1, 0 },
+    { "0.5 + .5", PARSE_ERROR_SUCCESS, 0, 1 },
+    { "+1", PARSE_ERROR_INCOMPLETE_EXPRESSION, 0, 0 },
+    { "+ 1 1", PARSE_ERROR_INCOMPLETE_EXPRESSION, 0, 0 },
+    { "1 1 +", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 },
+    { "1 ++ 1", PARSE_ERROR_INCOMPLETE_EXPRESSION, 2, 0 },
   };
 
   size_t success_count = sizeof(cases) / sizeof(struct test_case);
