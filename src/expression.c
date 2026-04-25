@@ -17,9 +17,12 @@ const struct parse_result SUCCESS_RESULT = { PARSE_ERROR_SUCCESS, 0 };
 const struct parse_result OOM_RESULT = { PARSE_ERROR_OOM, 0 };
 
 enum token_type {
+  TOKEN_UNKNOWN,
+  TOKEN_DIVIDE,
   TOKEN_MINUS,
   TOKEN_NUMBER,
   TOKEN_PLUS,
+  TOKEN_TIMES,
 };
 
 struct token {
@@ -30,8 +33,10 @@ struct token {
 
 bool is_token_operator(enum token_type type) {
   switch (type) {
+    case TOKEN_DIVIDE:
     case TOKEN_MINUS:
     case TOKEN_PLUS:
+    case TOKEN_TIMES:
       return true;
   }
 
@@ -51,6 +56,9 @@ bool is_left_token_lower_or_equal_precedence(enum token_type left, enum token_ty
   return
     // Non-operators all have the same precedence
     (!is_token_operator(left) && !is_token_operator(right)) ||
+
+    // Times and divide have the second highest precedence amongst operators
+    ((right == TOKEN_DIVIDE) || (right == TOKEN_TIMES)) ||
 
     // The right token must be plus or minus so verify the left is also plus or
     // minus
@@ -152,6 +160,20 @@ int add_token(struct deque *tokens, enum token_type type, size_t start_index, si
   return 0;
 }
 
+enum token_type token_type_from_char(char c) {
+  if (c == '/') {
+    return TOKEN_DIVIDE;
+  } else if (c == '-') {
+    return TOKEN_MINUS;
+  } else if (c == '+') {
+    return TOKEN_PLUS;
+  } else if (c == '*') {
+    return TOKEN_TIMES;
+  }
+
+  return TOKEN_UNKNOWN;
+}
+
 struct parse_result tokenize(const char *s, struct deque **tokens) {
   *tokens = malloc_deque(token_deleter);
   size_t start_index = 0;
@@ -161,6 +183,8 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
   struct parse_result result = SUCCESS_RESULT;
   while (start_index < char_length) {
     int c = s[start_index];
+    enum token_type type = token_type_from_char(c);
+
     if (c == '\0') {
       // Reached the end of the string. Embedded nulls are not supported
       break;
@@ -178,16 +202,8 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
       }
 
       start_index += len;
-    } else if (c == '+') {
-      deque_result = add_token(*tokens, TOKEN_PLUS, start_index, 1);
-      if (deque_result != 0) {
-        result = OOM_RESULT;
-        CLEANUP_IF_FAILED(result);
-      }
-
-      ++start_index;
-    } else if (c == '-') {
-      deque_result = add_token(*tokens, TOKEN_MINUS, start_index, 1);
+    } else if (type != TOKEN_UNKNOWN) {
+      deque_result = add_token(*tokens, type, start_index, 1);
       if (deque_result != 0) {
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
@@ -303,6 +319,10 @@ enum ex_type {
 
 typedef double _Complex (*binary_operation)(double _Complex left, double _Complex right);
 
+double _Complex divide(double _Complex left, double _Complex right) {
+  return left / right;
+}
+
 double _Complex minus(double _Complex left, double _Complex right) {
   return left - right;
 }
@@ -311,13 +331,23 @@ double _Complex plus(double _Complex left, double _Complex right) {
   return left + right;
 }
 
+double _Complex times(double _Complex left, double _Complex right) {
+  return left * right;
+}
+
 binary_operation operation_from_operator(enum token_type type) {
   switch (type) {
+    case TOKEN_DIVIDE:
+      return divide;
+
     case TOKEN_MINUS:
       return minus;
     
     case TOKEN_PLUS:
       return plus;
+    
+    case TOKEN_TIMES:
+      return times;
   }
 
   return nullptr;
@@ -433,8 +463,10 @@ int build_parse_tree_walker(void *current, void *extra) {
       ex = nullptr;
       break;
     
+    case TOKEN_DIVIDE:
     case TOKEN_MINUS:
     case TOKEN_PLUS:
+    case TOKEN_TIMES:
       int len = deque_len(state->stack);
       if (len < 2) {
         state->last_result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
