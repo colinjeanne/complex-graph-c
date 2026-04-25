@@ -47,23 +47,25 @@ struct deque *malloc_deque(deque_item_deleter deleter) {
 }
 
 void free_deque(struct deque *d) {
-  if (deque_len(d) == 0) {
-    free(d);
+  if (d == nullptr) {
+    return;
   }
+  
+  if (deque_len(d) > 0) {
+    struct deque_item *current = d->head;
+    while (current != nullptr) {
+      struct deque_item *to_free = current;
+      current = current->next;
 
-  struct deque_item *current = d->head;
-  while (current != nullptr) {
-    struct deque_item *to_free = current;
-    current = current->next;
-
-    d->deleter(to_free->data);
-    free_deque_item(to_free);
+      d->deleter(to_free->data);
+      free_deque_item(to_free);
+    }
   }
 
   free(d);
 }
 
-void *peek_front(struct deque *d) {
+void *deque_peek_front(struct deque *d) {
   if (deque_len(d) == 0) {
     return nullptr;
   }
@@ -77,9 +79,16 @@ int deque_push_back(struct deque *d, void *data) {
     return -1;
   }
 
-  tail->prev = d->tail;
-  d->tail->next = tail;
-  d->tail = tail;
+  if (deque_len(d) == 0) {
+    d->head = tail;
+    d->tail = tail;
+  } else {
+    tail->prev = d->tail;
+    d->tail->next = tail;
+    d->tail = tail;
+  }
+
+  ++d->len;
 
   return 0;
 }
@@ -90,9 +99,16 @@ int deque_push_front(struct deque *d, void *data) {
     return -1;
   }
 
-  head->next = d->head;
-  d->head->prev = head;
-  d->head = head;
+  if (deque_len(d) == 0) {
+    d->head = head;
+    d->tail = head;
+  } else {
+    head->next = d->head;
+    d->head->prev = head;
+    d->head = head;
+  }
+
+  ++d->len;
 
   return 0;
 }
@@ -111,6 +127,8 @@ void *deque_pop_back(struct deque *d) {
     d->tail = tail->prev;
     d->tail->next = nullptr;
   }
+
+  --d->len;
 
   free_deque_item(tail);
 
@@ -131,6 +149,8 @@ void *deque_pop_front(struct deque *d) {
     d->head = head->next;
     d->head->prev = nullptr;
   }
+
+  --d->len;
   
   free_deque_item(head);
 
@@ -147,7 +167,7 @@ void walk_deque(struct deque *d, deque_walker walker, void *extra) {
     current != nullptr;
     current = current->next
   ) {
-    int should_continue = walker(current, extra);
+    int should_continue = walker(current->data, extra);
     if (!should_continue) {
       break;
     }
