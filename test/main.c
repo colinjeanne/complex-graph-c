@@ -67,9 +67,10 @@ int main(void) {
 
   struct test_case cases[] = {
     { "", PARSE_ERROR_INCOMPLETE_EXPRESSION, 0, 0 },
-    { "0", PARSE_ERROR_SUCCESS, 0, 0 },
+    { "1", PARSE_ERROR_SUCCESS, 0, 1 },
+    { " 1 ", PARSE_ERROR_SUCCESS, 0, 1 },
     { "10", PARSE_ERROR_SUCCESS, 0, 10 },
-    { "00", PARSE_ERROR_SUCCESS, 0, 0 },
+    { "01", PARSE_ERROR_SUCCESS, 0, 1 },
     { ".5", PARSE_ERROR_SUCCESS, 0, 0.5 },
     { ".0", PARSE_ERROR_SUCCESS, 0, 0 },
     { ".005", PARSE_ERROR_SUCCESS, 0, 0.005 },
@@ -79,7 +80,8 @@ int main(void) {
     { "10.05", PARSE_ERROR_SUCCESS, 0, 10.05 },
     { ".", PARSE_ERROR_EXPECTED_DIGIT, 1, 0 },
     { ".0.", PARSE_ERROR_EXPECTED_DIGIT, 3, 0 },
-    { ".0.0", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 }
+    { ".0.0", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 },
+    { "1 1", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 }
   };
 
   size_t success_count = sizeof(cases) / sizeof(struct test_case);

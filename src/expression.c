@@ -17,7 +17,6 @@ const struct parse_result SUCCESS_RESULT = { PARSE_ERROR_SUCCESS, 0 };
 const struct parse_result OOM_RESULT = { PARSE_ERROR_OOM, 0 };
 
 enum token_type {
-  TOKEN_SPACE,
   TOKEN_NUMBER,
 };
 
@@ -25,7 +24,6 @@ struct token {
   enum token_type type;
   size_t start_index;
   size_t len;
-  struct token *next_token;
 };
 
 struct token *malloc_token(enum token_type type, size_t start_index, size_t len) {
@@ -37,7 +35,6 @@ struct token *malloc_token(enum token_type type, size_t start_index, size_t len)
   tok->type = type;
   tok->start_index = start_index;
   tok->len = len;
-  tok->next_token = nullptr;
 
   return tok;
 }
@@ -85,8 +82,8 @@ double parse_number(const char *s, size_t start_index, size_t len) {
   bool seen_decimal = false;
   double base = 10;
 
-  for (size_t current = start_index; current < len; ++current) {
-    char c = s[current];
+  for (size_t current = 0; current < len; ++current) {
+    char c = s[current + start_index];
 
     int digit;
     if (isdigit(c)) {
@@ -117,25 +114,13 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
   struct token *tok = nullptr;
   int deque_result;
 
-  struct parse_result result;
+  struct parse_result result = SUCCESS_RESULT;
   while (start_index < char_length) {
     int c = s[start_index];
     if (c == '\0') {
       // Reached the end of the string. Embedded nulls are not supported
       break;
     } else if (isspace(c)) {
-      tok = malloc_token(TOKEN_SPACE, start_index, 1);
-      if (tok == nullptr) {
-        result = OOM_RESULT;
-        CLEANUP_IF_FAILED(result);
-      }
-
-      deque_result = deque_push_back(*tokens, tok);
-      if (deque_result != 0) {
-        result = OOM_RESULT;
-        CLEANUP_IF_FAILED(result);
-      }
-
       ++start_index;
     } else if (is_numeric_character(c)) {
       size_t len;
@@ -154,6 +139,7 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
         CLEANUP_IF_FAILED(result);
       }
 
+      tok = nullptr;
       start_index += len;
     } else {
       ++start_index;
@@ -163,7 +149,7 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
   cleanup:
   free_token(tok);
 
-  return SUCCESS_RESULT;
+  return result;
 }
 
 enum ex_type {
@@ -241,9 +227,6 @@ int build_parse_tree_walker(void *current, void *extra) {
       }
 
       ex = nullptr;
-      break;
-    
-    case TOKEN_SPACE:
       break;
   }
 
