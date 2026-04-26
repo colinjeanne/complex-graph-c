@@ -92,10 +92,19 @@ int main(void) {
     { "2 * 3 / 4 * 6", PARSE_ERROR_SUCCESS, 0, 9 },
     { "1+", PARSE_ERROR_INCOMPLETE_EXPRESSION, 1, 0 },
     { "0.5 + .5", PARSE_ERROR_SUCCESS, 0, 1 },
-    { "+1", PARSE_ERROR_INCOMPLETE_EXPRESSION, 0, 0 },
-    { "+ 1 1", PARSE_ERROR_INCOMPLETE_EXPRESSION, 0, 0 },
+    { "+1", PARSE_ERROR_SUCCESS, 0, 1 },
+    { "-1", PARSE_ERROR_SUCCESS, 0, -1 },
+    { "-+1", PARSE_ERROR_SUCCESS, 0, -1 },
+    { "--1", PARSE_ERROR_SUCCESS, 0, 1 },
+    { "+ 1 1", PARSE_ERROR_EXCESS_EXPRESSION, 4, 0 },
     { "1 1 +", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 },
-    { "1 ++ 1", PARSE_ERROR_INCOMPLETE_EXPRESSION, 2, 0 },
+    { "1 ++ 1", PARSE_ERROR_SUCCESS, 0, 2 },
+    { "1 +- 2", PARSE_ERROR_SUCCESS, 0, -1 },
+    { "1 -- 2", PARSE_ERROR_SUCCESS, 0, 3 },
+    { "-2*3", PARSE_ERROR_SUCCESS, 0, -6 },
+    { "-2*+3", PARSE_ERROR_SUCCESS, 0, -6 },
+    { "2 * -3", PARSE_ERROR_SUCCESS, 0, -6 },
+    { "-2 * -3", PARSE_ERROR_SUCCESS, 0, 6 },
   };
 
   size_t success_count = sizeof(cases) / sizeof(struct test_case);

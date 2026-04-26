@@ -65,6 +65,14 @@ void free_deque(struct deque *d) {
   free(d);
 }
 
+void *deque_peek_back(struct deque *d) {
+  if (deque_len(d) == 0) {
+    return nullptr;
+  }
+
+  return d->tail->data;
+}
+
 void *deque_peek_front(struct deque *d) {
   if (deque_len(d) == 0) {
     return nullptr;

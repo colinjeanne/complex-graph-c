@@ -20,6 +20,7 @@ enum token_type {
   TOKEN_UNKNOWN,
   TOKEN_DIVIDE,
   TOKEN_MINUS,
+  TOKEN_NEGATE,
   TOKEN_NUMBER,
   TOKEN_PLUS,
   TOKEN_TIMES,
@@ -37,6 +38,15 @@ bool is_token_operator(enum token_type type) {
     case TOKEN_MINUS:
     case TOKEN_PLUS:
     case TOKEN_TIMES:
+      return true;
+  }
+
+  return false;
+}
+
+bool is_token_unary_function(enum token_type type) {
+  switch (type) {
+    case TOKEN_NEGATE:
       return true;
   }
 
@@ -63,6 +73,19 @@ bool is_left_token_lower_or_equal_precedence(enum token_type left, enum token_ty
     // The right token must be plus or minus so verify the left is also plus or
     // minus
     ((left == TOKEN_PLUS) || (left == TOKEN_PLUS));
+}
+
+bool is_token_unary_forcing(enum token_type type) {
+  switch (type) {
+    case TOKEN_DIVIDE:
+    case TOKEN_MINUS:
+    case TOKEN_NEGATE:
+    case TOKEN_PLUS:
+    case TOKEN_TIMES:
+      return true;
+  }
+
+  return false;
 }
 
 struct token *malloc_token(enum token_type type, size_t start_index, size_t len) {
@@ -221,6 +244,86 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
   return result;
 }
 
+struct parse_result add_implied_tokens(struct deque *tokens, struct deque **processed) {
+  *processed = nullptr;
+  if (tokens == nullptr) {
+    return SUCCESS_RESULT;
+  }
+
+  *processed = malloc_deque(token_deleter);
+  if (*processed == nullptr) {
+    return OOM_RESULT;
+  }
+
+  struct parse_result result = SUCCESS_RESULT;
+
+  struct token *tok;
+  for (
+    tok = deque_pop_front(tokens);
+    tok != nullptr;
+    tok = deque_pop_front(tokens)
+  ) {
+    int deque_result;
+    struct token *next = deque_peek_front(tokens);
+    struct token *last_processed = deque_peek_back(*processed);
+
+    switch (tok->type) {
+      case TOKEN_DIVIDE:
+      case TOKEN_TIMES:
+        deque_result = deque_push_back(*processed, tok);
+        if (deque_result != 0) {
+          result = OOM_RESULT;
+          CLEANUP_IF_FAILED(result);
+        }
+        break;
+
+      case TOKEN_MINUS:
+      case TOKEN_PLUS:
+        if (
+          (deque_len(*processed) == 0) ||
+          is_token_unary_forcing(last_processed->type)
+        ) {
+          // Only include a token for unary minus since unary plus is the
+          // identity function and can be ignored.
+          if (tok->type == TOKEN_MINUS) {
+            deque_result = add_token(*processed, TOKEN_NEGATE, tok->start_index, tok->len);
+            if (deque_result != 0) {
+              result = OOM_RESULT;
+              CLEANUP_IF_FAILED(result);
+            }
+          }
+
+          // We have replaced (or ignored) this token, free it
+          free_token(tok);
+          tok = nullptr;
+        } else {
+          deque_result = deque_push_back(*processed, tok);
+          if (deque_result != 0) {
+            result = OOM_RESULT;
+            CLEANUP_IF_FAILED(result);
+          }
+        }
+        break;
+      
+      case TOKEN_NUMBER:
+        deque_result = deque_push_back(*processed, tok);
+        if (deque_result != 0) {
+          result = OOM_RESULT;
+          CLEANUP_IF_FAILED(result);
+        }
+        break;
+    }
+  }
+
+  cleanup:
+  // If there was an error processing the tokens this could have been popped
+  // without having been pushed to processed. This is the only case where this
+  // will be non-null
+  free_token(tok);
+
+  return result;
+}
+
 struct parse_result convert_to_reverse_polish_notation(struct deque *tokens, struct deque **rpn_tokens) {
   *rpn_tokens = nullptr;
   if (tokens == nullptr) {
@@ -287,6 +390,12 @@ struct parse_result convert_to_reverse_polish_notation(struct deque *tokens, str
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
       }
+    } else if (is_token_unary_function(tok->type)) {
+      deque_result = deque_push_front(ops, tok);
+      if (deque_result != 0) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
+      }
     }
 
     prev_token = tok;
@@ -296,6 +405,7 @@ struct parse_result convert_to_reverse_polish_notation(struct deque *tokens, str
     struct token *op = deque_pop_front(ops);
     int deque_result = deque_push_back(*rpn_tokens, op);
     if (deque_result != 0) {
+      free_token(op);
       result = OOM_RESULT;
       CLEANUP_IF_FAILED(result);
     }
@@ -315,7 +425,23 @@ struct parse_result convert_to_reverse_polish_notation(struct deque *tokens, str
 enum ex_type {
   EX_BINARY_OPERATION,
   EX_NUMBER,
+  EX_UNARY_OPERATION,
 };
+
+typedef double _Complex (*unary_operation)(double _Complex operand);
+
+double _Complex negate(double _Complex operand) {
+  return -operand;
+}
+
+unary_operation unary_operation_from_token(enum token_type type) {
+  switch (type) {
+    case TOKEN_NEGATE:
+      return negate;
+  }
+
+  return nullptr;
+}
 
 typedef double _Complex (*binary_operation)(double _Complex left, double _Complex right);
 
@@ -362,7 +488,11 @@ struct expression {
     struct {
       struct expression *left_child;
       struct expression *right_child;
-      binary_operation eval;
+      binary_operation binary_eval;
+    };
+    struct {
+      struct expression *operand;
+      unary_operation unary_eval;
     };
   };
 };
@@ -398,7 +528,7 @@ struct expression *malloc_binary_operation_expression(
   }
 
   ex->type = EX_BINARY_OPERATION;
-  ex->eval = eval;
+  ex->binary_eval = eval;
   ex->left_child = left_child;
   ex->right_child = right_child;
   ex->start_index = start_index;
@@ -408,7 +538,31 @@ struct expression *malloc_binary_operation_expression(
 }
 
 double _Complex evaluate_binary_operation_expression(const struct expression *ex) {
-  return ex->eval(evaluate_expression(ex->left_child), evaluate_expression(ex->right_child));
+  return ex->binary_eval(evaluate_expression(ex->left_child), evaluate_expression(ex->right_child));
+}
+
+struct expression *malloc_unary_operation_expression(
+  unary_operation eval,
+  struct expression *operand,
+  size_t start_index,
+  size_t len
+) {
+  struct expression *ex = malloc(sizeof(struct expression));
+  if (ex == nullptr) {
+    return nullptr;
+  }
+
+  ex->type = EX_UNARY_OPERATION;
+  ex->unary_eval = eval;
+  ex->operand = operand;
+  ex->start_index = start_index;
+  ex->len = len;
+
+  return ex;
+}
+
+double _Complex evaluate_unary_operation_expression(const struct expression *ex) {
+  return ex->unary_eval(evaluate_expression(ex->operand));
 }
 
 void free_expression(struct expression *ex) {
@@ -421,9 +575,17 @@ void free_expression(struct expression *ex) {
       free(ex->left_child);
       free(ex->right_child);
       break;
+    
+    case EX_UNARY_OPERATION:
+      free(ex->operand);
+      break;
   }
 
   free(ex);
+}
+
+int merge_expression_len(size_t left_start_index, size_t right_start_index, size_t right_len) {
+  return (right_start_index + right_len) - left_start_index;
 }
 
 void expression_deleter(void *data) {
@@ -480,7 +642,11 @@ int build_parse_tree_walker(void *current, void *extra) {
         left_child,
         right_child,
         left_child->start_index,
-        (right_child->start_index + right_child->len) - left_child->len
+        merge_expression_len(
+          left_child->start_index,
+          right_child->start_index,
+          right_child->len
+        )
       );
       if (ex == nullptr) {
         state->last_result = OOM_RESULT;
@@ -496,6 +662,35 @@ int build_parse_tree_walker(void *current, void *extra) {
       ex = nullptr;
       left_child = nullptr;
       right_child = nullptr;
+      break;
+
+    case TOKEN_NEGATE:
+      if (deque_len(state->stack) == 0) {
+        state->last_result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(state->last_result);
+      }
+
+      right_child = deque_pop_back(state->stack);
+      ex = malloc_unary_operation_expression(
+        unary_operation_from_token(tok->type),
+        right_child,
+        tok->start_index,
+        merge_expression_len(
+          tok->start_index,
+          right_child->start_index,
+          right_child->len
+        )
+      );
+
+      deque_result = deque_push_back(state->stack, ex);
+      if (deque_result != 0) {
+        state->last_result = OOM_RESULT;
+        CLEANUP_IF_FAILED(state->last_result);
+      }
+
+      ex = nullptr;
+      right_child = nullptr;
+
       break;
   }
 
@@ -547,12 +742,16 @@ struct parse_result make_expression(const char *s, struct expression **ex) {
 
   struct parse_result result;
   struct deque *tokens = nullptr;
+  struct deque *processed = nullptr;
   struct deque *rpn_tokens = nullptr;
   
   result = tokenize(s, &tokens);
   CLEANUP_IF_FAILED(result);
 
-  result = convert_to_reverse_polish_notation(tokens, &rpn_tokens);
+  result = add_implied_tokens(tokens, &processed);
+  CLEANUP_IF_FAILED(result);
+
+  result = convert_to_reverse_polish_notation(processed, &rpn_tokens);
   CLEANUP_IF_FAILED(result);
 
   struct expression *root;
@@ -565,6 +764,7 @@ struct parse_result make_expression(const char *s, struct expression **ex) {
 
   cleanup:
   free_deque(tokens);
+  free_deque(processed);
   free_deque(rpn_tokens);
 
   return result;
@@ -577,6 +777,9 @@ double _Complex evaluate_expression(const struct expression *ex) {
 
     case EX_NUMBER:
       return evaluate_number_expression(ex);
+    
+    case EX_UNARY_OPERATION:
+      return evaluate_unary_operation_expression(ex);
   }
 
   return 0;
