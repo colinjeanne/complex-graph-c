@@ -92,6 +92,8 @@ int main(void) {
     { "2 * 3 / 4 * 6", PARSE_ERROR_SUCCESS, 0, 9 },
     { "1+", PARSE_ERROR_INCOMPLETE_EXPRESSION, 1, 0 },
     { "0.5 + .5", PARSE_ERROR_SUCCESS, 0, 1 },
+    { "+", PARSE_ERROR_INCOMPLETE_EXPRESSION, 0, 0 },
+    { "-", PARSE_ERROR_INCOMPLETE_EXPRESSION, 0, 0 },
     { "+1", PARSE_ERROR_SUCCESS, 0, 1 },
     { "-1", PARSE_ERROR_SUCCESS, 0, -1 },
     { "-+1", PARSE_ERROR_SUCCESS, 0, -1 },

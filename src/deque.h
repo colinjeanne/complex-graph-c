@@ -23,4 +23,17 @@ typedef int (*deque_walker)(void *current, void *extra);
 
 void walk_deque(struct deque *d, deque_walker walker, void *extra);
 
+struct iterator;
+
+struct iterator *malloc_iterator(struct deque *d);
+void free_iterator(struct iterator *it);
+
+void restart_iterator(struct iterator *it);
+bool is_end_iterator(struct iterator *it);
+void *iterator_data(struct iterator *it);
+void *iterator_next(struct iterator *it);
+
+void *remove_at_and_backup_iterator(struct iterator *it);
+void *replace_iterator_data(struct iterator *it, void *data);
+
 #endif

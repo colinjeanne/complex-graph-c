@@ -181,3 +181,97 @@ void walk_deque(struct deque *d, deque_walker walker, void *extra) {
     }
   }
 }
+
+struct iterator {
+  struct deque *d;
+  struct deque_item *item;
+  bool is_before_beginning;
+};
+
+struct iterator *malloc_iterator(struct deque *d) {
+  struct iterator *it = malloc(sizeof(struct iterator));
+  if (it == nullptr) {
+    return nullptr;
+  }
+
+  it->d = d;
+  restart_iterator(it);
+  return it;
+}
+
+void free_iterator(struct iterator *it) {
+  free(it);
+}
+
+void restart_iterator(struct iterator *it) {
+  it->item = it->d->head;
+  it->is_before_beginning = false;
+}
+
+bool is_end_iterator(struct iterator *it) {
+  return !it->is_before_beginning && it->item == nullptr;
+}
+
+void *iterator_data(struct iterator *it) {
+  if (it->item == nullptr) {
+    return nullptr;
+  }
+
+  return it->item->data;
+}
+
+void *iterator_next(struct iterator *it) {
+  if (it->is_before_beginning) {
+    restart_iterator(it);
+    return iterator_data(it);
+  }
+
+  if (it->item == nullptr) {
+    return nullptr;
+  }
+
+  it->item = it->item->next;
+  return iterator_data(it);
+}
+
+void *remove_at_and_backup_iterator(struct iterator *it) {
+  struct deque_item *old_item = it->item;
+  void *data = old_item->data;
+
+  old_item->data = nullptr;
+
+  if (it->item->prev != nullptr) {
+    it->item = it->item->prev;
+    it->item->next = old_item->next;
+
+    if (old_item->next != nullptr) {
+      old_item->next->prev = it->item;
+    } else {
+      it->d->tail = it->item;
+    }
+  } else {
+    it->item = nullptr;
+    it->is_before_beginning = true;
+
+    it->d->head = old_item->next;
+    if (it->d->head != nullptr) {
+      it->d->head->prev = nullptr;
+    }
+
+    if (it->d->tail == old_item) {
+      it->d->tail = it->d->head;
+    }
+  }
+
+  --it->d->len;
+
+  free_deque_item(old_item);
+
+  return data;
+}
+
+void *replace_iterator_data(struct iterator *it, void *data) {
+  void *old = it->item->data;
+  it->item->data = data;
+  return old;
+}

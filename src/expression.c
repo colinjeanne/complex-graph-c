@@ -231,82 +231,58 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
   return result;
 }
 
-struct parse_result add_implied_tokens(struct deque *tokens, struct deque **processed) {
-  *processed = nullptr;
+struct parse_result add_implied_tokens(struct deque *tokens) {
   if (tokens == nullptr) {
     return SUCCESS_RESULT;
   }
 
-  *processed = malloc_deque(token_deleter);
-  if (*processed == nullptr) {
+  struct iterator *it = malloc_iterator(tokens);
+  if (it == nullptr) {
     return OOM_RESULT;
   }
 
   struct parse_result result = SUCCESS_RESULT;
 
-  struct token *tok;
-  for (
-    tok = deque_pop_front(tokens);
-    tok != nullptr;
-    tok = deque_pop_front(tokens)
-  ) {
+  struct token *last_token = nullptr;
+  for (; !is_end_iterator(it); iterator_next(it)) {
+    struct token *current = iterator_data(it);
     int deque_result;
-    struct token *next = deque_peek_front(tokens);
-    struct token *last_processed = deque_peek_back(*processed);
 
-    switch (tok->type) {
-      case TOKEN_DIVIDE:
-      case TOKEN_TIMES:
-        deque_result = deque_push_back(*processed, tok);
-        if (deque_result != 0) {
-          result = OOM_RESULT;
-          CLEANUP_IF_FAILED(result);
-        }
-        break;
-
+    switch (current->type) {
       case TOKEN_MINUS:
       case TOKEN_PLUS:
         if (
-          (deque_len(*processed) == 0) ||
-          is_token_unary_forcing(last_processed->type)
+          (last_token == nullptr) ||
+          is_token_unary_forcing(last_token->type)
         ) {
           // Only include a token for unary minus since unary plus is the
           // identity function and can be ignored.
-          if (tok->type == TOKEN_MINUS) {
-            deque_result = add_token(*processed, TOKEN_NEGATE, tok->start_index, tok->len, 0);
-            if (deque_result != 0) {
+          if (current->type == TOKEN_MINUS) {
+            struct token *negate = malloc_token(TOKEN_NEGATE, current->start_index, current->len, 0);
+            if (negate == nullptr) {
               result = OOM_RESULT;
               CLEANUP_IF_FAILED(result);
             }
+
+            replace_iterator_data(it, negate);
+            last_token = negate;
+          } else {
+            remove_at_and_backup_iterator(it);
           }
 
-          // We have replaced (or ignored) this token, free it
-          free_token(tok);
-          tok = nullptr;
+          free_token(current);
         } else {
-          deque_result = deque_push_back(*processed, tok);
-          if (deque_result != 0) {
-            result = OOM_RESULT;
-            CLEANUP_IF_FAILED(result);
-          }
+          last_token = current;
         }
         break;
       
-      case TOKEN_NUMBER:
-        deque_result = deque_push_back(*processed, tok);
-        if (deque_result != 0) {
-          result = OOM_RESULT;
-          CLEANUP_IF_FAILED(result);
-        }
-        break;
+      default:
+        last_token = current;
     }
   }
 
   cleanup:
-  // If there was an error processing the tokens this could have been popped
-  // without having been pushed to processed. This is the only case where this
-  // will be non-null
-  free_token(tok);
+  free_iterator(it);
 
   return result;
 }
@@ -728,16 +704,15 @@ struct parse_result make_expression(const char *s, struct expression **ex) {
 
   struct parse_result result;
   struct deque *tokens = nullptr;
-  struct deque *processed = nullptr;
   struct deque *rpn_tokens = nullptr;
   
   result = tokenize(s, &tokens);
   CLEANUP_IF_FAILED(result);
 
-  result = add_implied_tokens(tokens, &processed);
+  result = add_implied_tokens(tokens);
   CLEANUP_IF_FAILED(result);
 
-  result = convert_to_reverse_polish_notation(processed, &rpn_tokens);
+  result = convert_to_reverse_polish_notation(tokens, &rpn_tokens);
   CLEANUP_IF_FAILED(result);
 
   struct expression *root;
@@ -750,7 +725,6 @@ struct parse_result make_expression(const char *s, struct expression **ex) {
 
   cleanup:
   free_deque(tokens);
-  free_deque(processed);
   free_deque(rpn_tokens);
 
   return result;
