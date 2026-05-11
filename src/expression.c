@@ -30,6 +30,7 @@ struct token {
   enum token_type type;
   size_t start_index;
   size_t len;
+  double _Complex value;
 };
 
 bool is_token_operator(enum token_type type) {
@@ -88,7 +89,7 @@ bool is_token_unary_forcing(enum token_type type) {
   return false;
 }
 
-struct token *malloc_token(enum token_type type, size_t start_index, size_t len) {
+struct token *malloc_token(enum token_type type, size_t start_index, size_t len, double _Complex value) {
   struct token *tok = malloc(sizeof(struct token));
   if (tok == nullptr) {
     return tok;
@@ -97,6 +98,7 @@ struct token *malloc_token(enum token_type type, size_t start_index, size_t len)
   tok->type = type;
   tok->start_index = start_index;
   tok->len = len;
+  tok->value = value;
 
   return tok;
 }
@@ -114,62 +116,46 @@ bool is_numeric_character(char c) {
   return (c == '.') || isdigit(c);
 }
 
-struct parse_result number_len(const char *s, size_t start_index, size_t *len) {
+struct parse_result parse_number(const char *s, size_t start_index, size_t *len, double _Complex *value) {
+  *value = 0;
+
   bool seen_decimal = false;
+  double base = 10;
 
   for (*len = 0;; ++*len) {
     char c = s[start_index + *len];
 
+    int digit = -1;
     if (isdigit(c)) {
-      continue;
+      digit = c - '0';
     } else if (c == '.' && !seen_decimal) {
       seen_decimal = true;
       continue;
     }
 
-    if (*len == 1 && seen_decimal) {
-      // The only character we've seen is the decimal and we now see a
-      // non-digit. This number is invalid.
-      return MAKE_RESULT(PARSE_ERROR_EXPECTED_DIGIT, start_index + 1);
+    if (digit == -1) {
+      if (*len == 1 && seen_decimal) {
+        // The only character we've seen is the decimal and we now see a
+        // non-digit. This number is invalid.
+        return MAKE_RESULT(PARSE_ERROR_EXPECTED_DIGIT, start_index + 1);
+      }
+
+      break;
     }
 
-    return SUCCESS_RESULT;
+    if (!seen_decimal) {
+      *value = *value * 10 + digit;
+    } else {
+      *value += digit / base;
+      base *= 10;
+    }
   }
 
   return SUCCESS_RESULT;
 }
 
-double parse_number(const char *s, size_t start_index, size_t len) {
-  double num = 0;
-  bool seen_decimal = false;
-  double base = 10;
-
-  for (size_t current = 0; current < len; ++current) {
-    char c = s[current + start_index];
-
-    int digit;
-    if (isdigit(c)) {
-      digit = c - '0';
-    } else if (c == '.') {
-      seen_decimal = true;
-      continue;
-    } else {
-      break;
-    }
-
-    if (!seen_decimal) {
-      num = num * 10 + digit;
-    } else {
-      num += digit / base;
-      base *= 10;
-    }
-  }
-
-  return num;
-}
-
-int add_token(struct deque *tokens, enum token_type type, size_t start_index, size_t len) {
-  struct token *tok = malloc_token(type, start_index, len);
+int add_token(struct deque *tokens, enum token_type type, size_t start_index, size_t len, double _Complex value) {
+  struct token *tok = malloc_token(type, start_index, len, value);
   if (tok == nullptr) {
     return -1;
   }
@@ -215,10 +201,11 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
       ++start_index;
     } else if (is_numeric_character(c)) {
       size_t len;
-      result = number_len(s, start_index, &len);
+      double _Complex value;
+      result = parse_number(s, start_index, &len, &value);
       CLEANUP_IF_FAILED(result);
 
-      deque_result = add_token(*tokens, TOKEN_NUMBER, start_index, len);
+      deque_result = add_token(*tokens, TOKEN_NUMBER, start_index, len, value);
       if (deque_result != 0) {
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
@@ -226,7 +213,7 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
 
       start_index += len;
     } else if (type != TOKEN_UNKNOWN) {
-      deque_result = add_token(*tokens, type, start_index, 1);
+      deque_result = add_token(*tokens, type, start_index, 1, 0);
       if (deque_result != 0) {
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
@@ -286,7 +273,7 @@ struct parse_result add_implied_tokens(struct deque *tokens, struct deque **proc
           // Only include a token for unary minus since unary plus is the
           // identity function and can be ignored.
           if (tok->type == TOKEN_MINUS) {
-            deque_result = add_token(*processed, TOKEN_NEGATE, tok->start_index, tok->len);
+            deque_result = add_token(*processed, TOKEN_NEGATE, tok->start_index, tok->len, 0);
             if (deque_result != 0) {
               result = OOM_RESULT;
               CLEANUP_IF_FAILED(result);
@@ -609,8 +596,7 @@ int build_parse_tree_walker(void *current, void *extra) {
   struct expression *right_child = nullptr;
   switch (tok->type) {
     case TOKEN_NUMBER:
-      double value = parse_number(state->s, tok->start_index, tok->len);
-      ex = malloc_number_expression(value, tok->start_index, tok->len);
+      ex = malloc_number_expression(tok->value, tok->start_index, tok->len);
       if (ex == nullptr) {
         state->last_result = OOM_RESULT;
         CLEANUP_IF_FAILED(state->last_result);
