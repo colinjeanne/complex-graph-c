@@ -236,15 +236,11 @@ struct parse_result add_implied_tokens(struct deque *tokens) {
     return SUCCESS_RESULT;
   }
 
-  struct iterator *it = malloc_iterator(tokens);
-  if (it == nullptr) {
-    return OOM_RESULT;
-  }
-
+  struct iterator it = iterator_for(tokens);
   struct parse_result result = SUCCESS_RESULT;
 
   struct token *last_token = nullptr;
-  for (; !is_end_iterator(it); iterator_next(it)) {
+  for (; !is_end_iterator(it); iterator_next(&it)) {
     struct token *current = iterator_data(it);
     int deque_result;
 
@@ -264,10 +260,10 @@ struct parse_result add_implied_tokens(struct deque *tokens) {
               CLEANUP_IF_FAILED(result);
             }
 
-            replace_iterator_data(it, negate);
+            replace_iterator_data(&it, negate);
             last_token = negate;
           } else {
-            remove_at_and_backup_iterator(it);
+            remove_at_and_backup_iterator(&it);
           }
 
           free_token(current);
@@ -282,7 +278,6 @@ struct parse_result add_implied_tokens(struct deque *tokens) {
   }
 
   cleanup:
-  free_iterator(it);
 
   return result;
 }
