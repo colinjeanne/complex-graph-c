@@ -19,10 +19,6 @@ void *deque_pop_back(struct deque *d);
 void *deque_pop_front(struct deque *d);
 size_t deque_len(struct deque *d);
 
-typedef int (*deque_walker)(void *current, void *extra);
-
-void walk_deque(struct deque *d, deque_walker walker, void *extra);
-
 struct iterator {
   struct deque *d;
   struct deque_item *item;

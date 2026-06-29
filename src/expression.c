@@ -31,49 +31,34 @@ struct token {
   size_t start_index;
   size_t len;
   double _Complex value;
+  unsigned char left_binding;
+  unsigned char right_binding;
 };
 
-bool is_token_operator(enum token_type type) {
-  switch (type) {
-    case TOKEN_DIVIDE:
-    case TOKEN_MINUS:
-    case TOKEN_PLUS:
-    case TOKEN_TIMES:
-      return true;
+struct token_details {
+  enum token_type type;
+  unsigned char left_binding;
+  unsigned char right_binding;
+};
+
+const struct token_details TOKEN_DETAILS[] = {
+  { TOKEN_UNKNOWN, 0, 0 },
+  { TOKEN_DIVIDE, 7, 8 },
+  { TOKEN_MINUS, 5, 6 },
+  { TOKEN_NEGATE, 99, 9 },
+  { TOKEN_NUMBER, 254, 255 },
+  { TOKEN_PLUS, 5, 6 },
+  { TOKEN_TIMES, 7, 8 },
+};
+
+struct token_details get_token_details(enum token_type type) {
+  for (size_t i = 1; i < sizeof(TOKEN_DETAILS) / sizeof(struct token_details); ++i) {
+    if (TOKEN_DETAILS[i].type == type) {
+      return TOKEN_DETAILS[i];
+    }
   }
 
-  return false;
-}
-
-bool is_token_unary_function(enum token_type type) {
-  switch (type) {
-    case TOKEN_NEGATE:
-      return true;
-  }
-
-  return false;
-}
-
-bool is_token_value(enum token_type type) {
-  switch (type) {
-    case TOKEN_NUMBER:
-      return true;
-  }
-
-  return false;
-}
-
-bool is_left_token_lower_or_equal_precedence(enum token_type left, enum token_type right) {
-  return
-    // Non-operators all have the same precedence
-    (!is_token_operator(left) && !is_token_operator(right)) ||
-
-    // Times and divide have the second highest precedence amongst operators
-    ((right == TOKEN_DIVIDE) || (right == TOKEN_TIMES)) ||
-
-    // The right token must be plus or minus so verify the left is also plus or
-    // minus
-    ((left == TOKEN_PLUS) || (left == TOKEN_PLUS));
+  return TOKEN_DETAILS[0];
 }
 
 bool is_token_unary_forcing(enum token_type type) {
@@ -99,6 +84,10 @@ struct token *malloc_token(enum token_type type, size_t start_index, size_t len,
   tok->start_index = start_index;
   tok->len = len;
   tok->value = value;
+
+  struct token_details details = get_token_details(type);
+  tok->left_binding = details.left_binding;
+  tok->right_binding = details.right_binding;
 
   return tok;
 }
@@ -272,110 +261,21 @@ struct parse_result add_implied_tokens(struct deque *tokens) {
         }
         break;
       
+      case TOKEN_NUMBER:
+        if ((last_token != nullptr) && (last_token->type == TOKEN_NUMBER)) {
+          result = MAKE_RESULT(PARSE_ERROR_EXCESS_EXPRESSION, current->start_index);
+          CLEANUP_IF_FAILED(result);
+        }
+
+        last_token = current;
+        break;
+      
       default:
         last_token = current;
     }
   }
 
   cleanup:
-
-  return result;
-}
-
-struct parse_result convert_to_reverse_polish_notation(struct deque *tokens, struct deque **rpn_tokens) {
-  *rpn_tokens = nullptr;
-  if (tokens == nullptr) {
-    return SUCCESS_RESULT;
-  }
-
-  *rpn_tokens = malloc_deque(token_deleter);
-  if (*rpn_tokens == nullptr) {
-    return OOM_RESULT;
-  }
-
-  struct parse_result result = SUCCESS_RESULT;
-  struct deque *ops = malloc_deque(token_deleter);
-  if (ops == nullptr) {
-    result = OOM_RESULT;
-    CLEANUP_IF_FAILED(result);
-  }
-
-  struct token *prev_token = nullptr;
-
-  struct token *tok;
-  for (
-    tok = deque_pop_front(tokens);
-    tok != nullptr;
-    tok = deque_pop_front(tokens)
-  ) {
-    int deque_result;
-    if (is_token_value(tok->type)) {
-      if (prev_token && prev_token->type == TOKEN_NUMBER) {
-        result = MAKE_RESULT(PARSE_ERROR_EXCESS_EXPRESSION, tok->start_index);
-        CLEANUP_IF_FAILED(result);
-      }
-
-      deque_result = deque_push_back(*rpn_tokens, tok);
-      if (deque_result != 0) {
-        result = OOM_RESULT;
-        CLEANUP_IF_FAILED(result);
-      }
-    } else if (is_token_operator(tok->type)) {
-      if (deque_len(*rpn_tokens) == 0) {
-        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
-        CLEANUP_IF_FAILED(result);
-      }
-
-      while (deque_len(ops) > 0) {
-        struct token *top = deque_peek_front(ops);
-        if (
-          !is_left_token_lower_or_equal_precedence(tok->type, top->type)
-        ) {
-          break;
-        }
-        
-        if (is_token_operator(top->type)) {
-          deque_result = deque_push_back(*rpn_tokens, top);
-        } else {
-          break;
-        }
-
-        deque_pop_front(ops);
-      }
-
-      deque_result = deque_push_front(ops, tok);
-      if (deque_result != 0) {
-        result = OOM_RESULT;
-        CLEANUP_IF_FAILED(result);
-      }
-    } else if (is_token_unary_function(tok->type)) {
-      deque_result = deque_push_front(ops, tok);
-      if (deque_result != 0) {
-        result = OOM_RESULT;
-        CLEANUP_IF_FAILED(result);
-      }
-    }
-
-    prev_token = tok;
-  }
-
-  while (deque_len(ops) > 0) {
-    struct token *op = deque_pop_front(ops);
-    int deque_result = deque_push_back(*rpn_tokens, op);
-    if (deque_result != 0) {
-      free_token(op);
-      result = OOM_RESULT;
-      CLEANUP_IF_FAILED(result);
-    }
-  }
-
-  cleanup:
-  free_deque(ops);
-
-  // If there was an error processing the tokens this could have been popped
-  // without having been pushed to rpn_tokens. This is the only case where this
-  // will be non-null
-  free_token(tok);
 
   return result;
 }
@@ -551,50 +451,81 @@ void expression_deleter(void *data) {
   free_expression(ex);
 }
 
-struct build_parse_tree_state {
-  const char *s;
-  struct parse_result last_result;
-  struct deque *stack;
+struct scope {
+  struct deque *expressions;
+  struct deque *operators;
 };
 
-int build_parse_tree_walker(void *current, void *extra) {
-  struct token *tok = (struct token *)current;
-  struct build_parse_tree_state *state = (struct build_parse_tree_state *)extra;
+void free_scope(struct scope *s) {
+  // The scope doesn't open the operator tokens and so cannot free them
+  free_deque(s->expressions);
+
+  free(s);
+}
+
+struct scope *malloc_scope() {
+  struct scope *s = malloc(sizeof(struct scope));
+  if (s == nullptr) {
+    return nullptr;
+  }
+
+  s->expressions = nullptr;
+
+  // The scope does not own the operator tokens
+  s->operators = nullptr;
+
+  s->expressions = malloc_deque(expression_deleter);
+  if (s->expressions == nullptr) {
+    free_scope(s);
+    return nullptr;
+  }
+
+  s->operators = malloc_deque(token_deleter);
+  if (s->operators == nullptr) {
+    free_scope(s);
+    return nullptr;
+  }
+
+  return s;
+}
+
+void scope_deleter(void *data) {
+  struct scope *s = (struct scope *)data;
+  free_scope(s);
+}
+
+struct parse_result malloc_expression(const struct scope *top, struct expression **ex) {
+  *ex = nullptr;
+
+  if (top == nullptr) {
+    return SUCCESS_RESULT;
+  }
 
   int deque_result;
-  struct expression *ex = nullptr;
+  struct parse_result result = SUCCESS_RESULT;
   struct expression *left_child = nullptr;
   struct expression *right_child = nullptr;
+
+  struct token *tok = deque_pop_back(top->operators);
+
   switch (tok->type) {
-    case TOKEN_NUMBER:
-      ex = malloc_number_expression(tok->value, tok->start_index, tok->len);
-      if (ex == nullptr) {
-        state->last_result = OOM_RESULT;
-        CLEANUP_IF_FAILED(state->last_result);
-      }
-
-      deque_result = deque_push_back(state->stack, ex);
-      if (deque_result != 0) {
-        state->last_result = OOM_RESULT;
-        CLEANUP_IF_FAILED(state->last_result);
-      }
-
-      ex = nullptr;
-      break;
-    
     case TOKEN_DIVIDE:
     case TOKEN_MINUS:
     case TOKEN_PLUS:
     case TOKEN_TIMES:
-      int len = deque_len(state->stack);
-      if (len < 2) {
-        state->last_result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
-        CLEANUP_IF_FAILED(state->last_result);
+      right_child = deque_pop_back(top->expressions);
+      if (right_child == nullptr) {
+        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(result);
       }
 
-      right_child = deque_pop_back(state->stack);
-      left_child = deque_pop_back(state->stack);
-      ex = malloc_binary_operation_expression(
+      left_child = deque_pop_back(top->expressions);
+      if (left_child == nullptr) {
+        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(result);
+      }
+      
+      *ex = malloc_binary_operation_expression(
         operation_from_operator(tok->type),
         left_child,
         right_child,
@@ -605,30 +536,23 @@ int build_parse_tree_walker(void *current, void *extra) {
           right_child->len
         )
       );
-      if (ex == nullptr) {
-        state->last_result = OOM_RESULT;
-        CLEANUP_IF_FAILED(state->last_result);
+      if (*ex == nullptr) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
       }
 
-      deque_result = deque_push_back(state->stack, ex);
-      if (deque_result != 0) {
-        state->last_result = OOM_RESULT;
-        CLEANUP_IF_FAILED(state->last_result);
-      }
-
-      ex = nullptr;
-      left_child = nullptr;
       right_child = nullptr;
+      left_child = nullptr;
       break;
-
+    
     case TOKEN_NEGATE:
-      if (deque_len(state->stack) == 0) {
-        state->last_result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
-        CLEANUP_IF_FAILED(state->last_result);
+      right_child = deque_pop_back(top->expressions);
+      if (right_child == nullptr) {
+        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(result);
       }
 
-      right_child = deque_pop_back(state->stack);
-      ex = malloc_unary_operation_expression(
+      *ex = malloc_unary_operation_expression(
         unary_operation_from_token(tok->type),
         right_child,
         tok->start_index,
@@ -638,58 +562,105 @@ int build_parse_tree_walker(void *current, void *extra) {
           right_child->len
         )
       );
-
-      deque_result = deque_push_back(state->stack, ex);
-      if (deque_result != 0) {
-        state->last_result = OOM_RESULT;
-        CLEANUP_IF_FAILED(state->last_result);
+      if (*ex == nullptr) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
       }
 
-      ex = nullptr;
       right_child = nullptr;
-
+      break;
+    
+    case TOKEN_NUMBER:
+      *ex = malloc_number_expression(tok->value, tok->start_index, tok->len);
+      if (*ex == nullptr) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
+      }
       break;
   }
 
-  return 1;
-
   cleanup:
-  free_expression(ex);
   free_expression(left_child);
   free_expression(right_child);
 
-  return 0;
+  return result;
+}
+
+struct parse_result close_scope(struct scope *top) {
+  struct expression *ex = nullptr;
+  struct parse_result result = malloc_expression(top, &ex);
+  CLEANUP_IF_FAILED(result);
+
+  if (ex == nullptr) {
+    return result;
+  }
+
+  int deque_result = deque_push_back(top->expressions, ex);
+  if (deque_result != 0) {
+    result = OOM_RESULT;
+    CLEANUP_IF_FAILED(result);
+  }
+
+  ex = nullptr;
+
+  cleanup:
+  free_expression(ex);
+
+  return result;
 }
 
 struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct expression **root) {
   *root = nullptr;
 
-  struct deque *stack = malloc_deque(expression_deleter);
-  if (stack == nullptr) {
-    return OOM_RESULT;
+  struct parse_result result = SUCCESS_RESULT;
+  struct scope *top = nullptr;
+  struct iterator it = iterator_for(tokens);
+
+  top = malloc_scope();
+  if (top == nullptr) {
+    result = OOM_RESULT;
+    CLEANUP_IF_FAILED(result);
   }
 
-  struct build_parse_tree_state state = { s, SUCCESS_RESULT, stack };
-  walk_deque(tokens, build_parse_tree_walker, &state);
+  for (it; !is_end_iterator(it); iterator_next(&it)) {
+    struct token *tok = iterator_data(it);
+    struct token *top_op = deque_peek_back(top->operators);
+    unsigned char right_binding = top_op != nullptr ? top_op->right_binding : 0;
 
-  struct parse_result result = state.last_result;
-  CLEANUP_IF_FAILED(result);
+    while (right_binding > tok->left_binding) {
+      result = close_scope(top);
+      CLEANUP_IF_FAILED(result);
 
-  *root = deque_pop_front(stack);
+      top_op = deque_peek_back(top->operators);
+      right_binding = top_op != nullptr ? top_op->right_binding : 0;
+    }
 
-  int len = deque_len(stack);
+    int deque_result = deque_push_back(top->operators, tok);
+    if (deque_result != 0) {
+      result = OOM_RESULT;
+      CLEANUP_IF_FAILED(result);
+    }
+  }
 
+  while (deque_len(top->operators) > 0) {
+    result = close_scope(top);
+    CLEANUP_IF_FAILED(result);
+  }
+
+  *root = deque_pop_front(top->expressions);
   if (*root == nullptr) {
     result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, 0);
-  } else if (len != 0) {
-    struct expression *ex = (struct expression *)deque_peek_front(stack);
-    result = MAKE_RESULT(PARSE_ERROR_EXCESS_EXPRESSION, ex->start_index);
-  } else {
-    result = SUCCESS_RESULT;
+    CLEANUP_IF_FAILED(result);
+  }
+
+  struct expression *rest = deque_peek_front(top->expressions);
+  if (rest != nullptr) {
+    result = MAKE_RESULT(PARSE_ERROR_EXCESS_EXPRESSION, rest->start_index);
+    CLEANUP_IF_FAILED(result);
   }
 
   cleanup:
-  free_deque(stack);
+  free_scope(top);
 
   return result;
 }
@@ -707,11 +678,8 @@ struct parse_result make_expression(const char *s, struct expression **ex) {
   result = add_implied_tokens(tokens);
   CLEANUP_IF_FAILED(result);
 
-  result = convert_to_reverse_polish_notation(tokens, &rpn_tokens);
-  CLEANUP_IF_FAILED(result);
-
   struct expression *root;
-  result = build_parse_tree(s, rpn_tokens, &root);
+  result = build_parse_tree(s, tokens, &root);
   CLEANUP_IF_FAILED(result);
 
   *ex = root;

@@ -169,19 +169,6 @@ size_t deque_len(struct deque *d) {
   return d->len;
 }
 
-void walk_deque(struct deque *d, deque_walker walker, void *extra) {
-  for (
-    struct deque_item *current = d->head;
-    current != nullptr;
-    current = current->next
-  ) {
-    int should_continue = walker(current->data, extra);
-    if (!should_continue) {
-      break;
-    }
-  }
-}
-
 struct iterator iterator_for(struct deque *d) {
   struct iterator it = { d };
   restart_iterator(&it);
