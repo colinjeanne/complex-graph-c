@@ -131,6 +131,16 @@ int main(void) {
     { "(1 1)", PARSE_ERROR_EXCESS_EXPRESSION, 3, 0 },
     { "(1) (1)", PARSE_ERROR_EXCESS_EXPRESSION, 4, 0 },
     { "2 * (3 - 1)", PARSE_ERROR_SUCCESS, 0, 4 },
+    { "abs(2)", PARSE_ERROR_SUCCESS, 0, 2 },
+    { "abs(-2)", PARSE_ERROR_SUCCESS, 0, 2 },
+    { "abs -2", PARSE_ERROR_EXPECTED_OPEN_PARENTHESIS, 3, 0 },
+    { "abs()", PARSE_ERROR_INCOMPLETE_EXPRESSION, 3, 0 },
+    { "abs", PARSE_ERROR_INCOMPLETE_EXPRESSION, 0, 0 },
+    { "-2 abs", PARSE_ERROR_INCOMPLETE_EXPRESSION, 3, 0 },
+    { "2 abs(3)", PARSE_ERROR_EXCESS_EXPRESSION, 2, 0 },
+    { "-2 abs(3)", PARSE_ERROR_EXCESS_EXPRESSION, 3, 0 },
+    { "-abs(2)", PARSE_ERROR_SUCCESS, 0, -2 },
+    { "1 + abs(2)", PARSE_ERROR_SUCCESS, 0, 3 },
   };
 
   size_t success_count = sizeof(cases) / sizeof(struct test_case);

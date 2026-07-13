@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(ComplexGraph)
 
 add_executable(complex-graph)
+target_link_libraries(complex-graph PRIVATE m)
 set_property(TARGET complex-graph PROPERTY C_STANDARD 23)
 set_property(TARGET complex-graph PROPERTY COMPILE_WARNING_AS_ERROR ON)
 
@@ -14,6 +15,7 @@ target_sources(complex-graph
 )
 
 add_executable(complex-graph-test)
+target_link_libraries(complex-graph-test PRIVATE m)
 set_property(TARGET complex-graph-test PROPERTY C_STANDARD 23)
 set_property(TARGET complex-graph-test PROPERTY COMPILE_WARNING_AS_ERROR ON)
 

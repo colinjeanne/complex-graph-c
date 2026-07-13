@@ -1,5 +1,7 @@
+#include <complex.h>
 #include <ctype.h>
 #include <float.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +18,109 @@
 const struct parse_result SUCCESS_RESULT = { PARSE_ERROR_SUCCESS, 0 };
 const struct parse_result OOM_RESULT = { PARSE_ERROR_OOM, 0 };
 
+double _Complex LN10 = 2.30258509299404568;
+double _Complex LN2 = 0.6931471805599453;
+double _Complex PI = 3.1415926535897932;
+
+typedef double _Complex (*unary_operation)(double _Complex z);
+
+double _Complex complex_abs(double _Complex z) {
+  return cabs(z);
+}
+
+double _Complex complex_arg(double _Complex z) {
+  return carg(z);
+}
+
+double _Complex complex_imag(double _Complex z) {
+  return cimag(z);
+}
+
+double _Complex complex_real(double _Complex z) {
+  return creal(z);
+}
+
+double _Complex cacot(double _Complex z) {
+  return (-I / 2) * clog((z + I) / (z - I));
+}
+
+double _Complex cacoth(double _Complex z) {
+  return clog((z + 1) / (z - 1)) / 2;
+}
+
+double _Complex cacsc(double _Complex z) {
+  return -I * clog(csqrt(1 - 1 / (z * z)) + I / z);
+}
+
+double _Complex cacsch(double _Complex z) {
+  return clog(csqrt(1 + 1 / (z * z)) + 1 / z);
+}
+
+double _Complex casec(double _Complex z) {
+  return -I * clog(I * csqrt(1 - 1 / (z * z)) + 1 / z);
+}
+
+double _Complex casech(double _Complex z) {
+  return clog(csqrt(-1 + 1 / (z * z)) + 1 / z);
+}
+
+double _Complex cceil(double _Complex z) {
+  return ceil(creal(z)) + ceil(cimag(z)) * I;
+}
+
+double _Complex ccot(double _Complex z) {
+  return 1 / ctan(z);
+}
+
+double _Complex ccoth(double _Complex z) {
+  return I * ccot(I * z);
+}
+
+double _Complex ccsc(double _Complex z) {
+  return 1 / csin(z);
+}
+
+double _Complex ccsch(double _Complex z) {
+  return I * ccsc(I * z);
+}
+
+double _Complex cfloor(double _Complex z) {
+  return floor(creal(z)) + floor(cimag(z)) * I;
+}
+
+double _Complex cfrac(double _Complex z) {
+  return creal(z) - trunc(creal(z)) +
+    (cimag(z) - trunc(cimag(z))) * I;
+}
+
+double _Complex clog10(double _Complex z) {
+  return clog(z) / LN10;
+}
+
+double _Complex clog2(double _Complex z) {
+  return clog(z) / LN2;
+}
+
+double _Complex negate(double _Complex z) {
+  return -z;
+}
+
+double _Complex cnint(double _Complex z) {
+  return nearbyint(creal(z)) + nearbyint(cimag(z)) * I;
+}
+
+double _Complex cnorm(double _Complex z) {
+  return z * conj(z);
+}
+
+double _Complex csec(double _Complex z) {
+  return 1 / ccos(z);
+}
+
+double _Complex csech(double _Complex z) {
+  return csec(I * z);
+}
+
 enum token_type {
   TOKEN_UNKNOWN,
   TOKEN_DIVIDE,
@@ -26,6 +131,7 @@ enum token_type {
   TOKEN_TIMES,
   TOKEN_OPEN_PARENTHESIS,
   TOKEN_CLOSE_PARENTHESIS,
+  TOKEN_UNARY_FUNCTION,
 };
 
 struct token {
@@ -33,6 +139,7 @@ struct token {
   size_t start_index;
   size_t len;
   double _Complex value;
+  unary_operation unary_eval;
   unsigned char left_binding;
   unsigned char right_binding;
 };
@@ -53,6 +160,7 @@ const struct token_details TOKEN_DETAILS[] = {
   { TOKEN_TIMES, 7, 8 },
   { TOKEN_OPEN_PARENTHESIS, 0, 0 },
   { TOKEN_CLOSE_PARENTHESIS, 0, 0 },
+  { TOKEN_UNARY_FUNCTION, 99, 9 },
 };
 
 struct token_details get_token_details(enum token_type type) {
@@ -79,7 +187,13 @@ bool is_token_unary_forcing(enum token_type type) {
   return false;
 }
 
-struct token *malloc_token(enum token_type type, size_t start_index, size_t len, double _Complex value) {
+struct token *malloc_token(
+  enum token_type type,
+  size_t start_index,
+  size_t len,
+  double _Complex value,
+  unary_operation unary_eval
+) {
   struct token *tok = malloc(sizeof(struct token));
   if (tok == nullptr) {
     return tok;
@@ -89,6 +203,7 @@ struct token *malloc_token(enum token_type type, size_t start_index, size_t len,
   tok->start_index = start_index;
   tok->len = len;
   tok->value = value;
+  tok->unary_eval = unary_eval;
 
   struct token_details details = get_token_details(type);
   tok->left_binding = details.left_binding;
@@ -148,8 +263,90 @@ struct parse_result parse_number(const char *s, size_t start_index, size_t *len,
   return SUCCESS_RESULT;
 }
 
-int add_token(struct deque *tokens, enum token_type type, size_t start_index, size_t len, double _Complex value) {
-  struct token *tok = malloc_token(type, start_index, len, value);
+size_t symbol_length(const char *s, size_t start_index) {
+  size_t len = 0;
+  while (isalnum(s[start_index + len])) {
+    ++len;
+  }
+
+  return len;
+}
+
+struct symbol_details {
+  const char *symbol;
+  size_t len;
+  enum token_type type;
+  double _Complex value;
+  unary_operation unary_eval;
+};
+
+#define MAKE_SYMBOL(symbol, type, value, unary_eval) { (symbol), (sizeof(symbol) - 1), (type), (value), (unary_eval) }
+
+const struct symbol_details SYMBOL_DETAILS[] = {
+  MAKE_SYMBOL("", TOKEN_UNKNOWN, 0, nullptr),
+  MAKE_SYMBOL("abs", TOKEN_UNARY_FUNCTION, 0, complex_abs),
+  MAKE_SYMBOL("arccos", TOKEN_UNARY_FUNCTION, 0, cacos),
+  MAKE_SYMBOL("arccosh", TOKEN_UNARY_FUNCTION, 0, cacosh),
+  MAKE_SYMBOL("arccot", TOKEN_UNARY_FUNCTION, 0, cacot),
+  MAKE_SYMBOL("arccoth", TOKEN_UNARY_FUNCTION, 0, cacoth),
+  MAKE_SYMBOL("arccsc", TOKEN_UNARY_FUNCTION, 0, cacsc),
+  MAKE_SYMBOL("arccsch", TOKEN_UNARY_FUNCTION, 0, cacsch),
+  MAKE_SYMBOL("arcsec", TOKEN_UNARY_FUNCTION, 0, casec),
+  MAKE_SYMBOL("arcsech", TOKEN_UNARY_FUNCTION, 0, casech),
+  MAKE_SYMBOL("arcsin", TOKEN_UNARY_FUNCTION, 0, casin),
+  MAKE_SYMBOL("arcsinh", TOKEN_UNARY_FUNCTION, 0, casinh),
+  MAKE_SYMBOL("arctan", TOKEN_UNARY_FUNCTION, 0, catan),
+  MAKE_SYMBOL("arctanh", TOKEN_UNARY_FUNCTION, 0, catanh),
+  MAKE_SYMBOL("arg", TOKEN_UNARY_FUNCTION, 0, complex_arg),
+  MAKE_SYMBOL("ceil", TOKEN_UNARY_FUNCTION, 0, cceil),
+  MAKE_SYMBOL("conj", TOKEN_UNARY_FUNCTION, 0, conj),
+  MAKE_SYMBOL("cos", TOKEN_UNARY_FUNCTION, 0, ccos),
+  MAKE_SYMBOL("cosh", TOKEN_UNARY_FUNCTION, 0, ccosh),
+  MAKE_SYMBOL("cot", TOKEN_UNARY_FUNCTION, 0, ccot),
+  MAKE_SYMBOL("coth", TOKEN_UNARY_FUNCTION, 0, ccoth),
+  MAKE_SYMBOL("csc", TOKEN_UNARY_FUNCTION, 0, ccsc),
+  MAKE_SYMBOL("csch", TOKEN_UNARY_FUNCTION, 0, ccsch),
+  MAKE_SYMBOL("exp", TOKEN_UNARY_FUNCTION, 0, cexp),
+  MAKE_SYMBOL("floor", TOKEN_UNARY_FUNCTION, 0, cfloor),
+  MAKE_SYMBOL("frac", TOKEN_UNARY_FUNCTION, 0, cfrac),
+  MAKE_SYMBOL("imag", TOKEN_UNARY_FUNCTION, 0, complex_imag),
+  MAKE_SYMBOL("log10", TOKEN_UNARY_FUNCTION, 0, clog10),
+  MAKE_SYMBOL("lg", TOKEN_UNARY_FUNCTION, 0, clog2),
+  MAKE_SYMBOL("ln", TOKEN_UNARY_FUNCTION, 0, clog),
+  MAKE_SYMBOL("nint", TOKEN_UNARY_FUNCTION, 0, cnint),
+  MAKE_SYMBOL("norm", TOKEN_UNARY_FUNCTION, 0, cnorm),
+  MAKE_SYMBOL("real", TOKEN_UNARY_FUNCTION, 0, complex_real),
+  MAKE_SYMBOL("sec", TOKEN_UNARY_FUNCTION, 0, csec),
+  MAKE_SYMBOL("sech", TOKEN_UNARY_FUNCTION, 0, csech),
+  MAKE_SYMBOL("sin", TOKEN_UNARY_FUNCTION, 0, csin),
+  MAKE_SYMBOL("sinh", TOKEN_UNARY_FUNCTION, 0, csinh),
+  MAKE_SYMBOL("sqrt", TOKEN_UNARY_FUNCTION, 0, csqrt),
+  MAKE_SYMBOL("tan", TOKEN_UNARY_FUNCTION, 0, ctan),
+  MAKE_SYMBOL("tanh", TOKEN_UNARY_FUNCTION, 0, ctanh),
+};
+
+struct symbol_details get_symbol_details(const char *s, size_t start_index, size_t len) {
+  for (size_t i = 1; i < sizeof(SYMBOL_DETAILS) / sizeof(struct symbol_details); ++i) {
+    if (
+      (SYMBOL_DETAILS[i].len == len) &&
+      (strncmp((s + start_index), SYMBOL_DETAILS[i].symbol, len) == 0)
+    ) {
+      return SYMBOL_DETAILS[i];
+    }
+  }
+
+  return SYMBOL_DETAILS[0];
+}
+
+int add_token(
+  struct deque *tokens,
+  enum token_type type,
+  size_t start_index,
+  size_t len,
+  double _Complex value,
+  unary_operation unary_eval
+) {
+  struct token *tok = malloc_token(type, start_index, len, value, unary_eval);
   if (tok == nullptr) {
     return -1;
   }
@@ -186,11 +383,17 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
   size_t start_index = 0;
   size_t char_length = strlen(s);
   int deque_result;
+  enum token_type last_type = TOKEN_UNKNOWN;
 
   struct parse_result result = SUCCESS_RESULT;
   while (start_index < char_length) {
     int c = s[start_index];
     enum token_type type = token_type_from_char(c);
+
+    if ((last_type == TOKEN_UNARY_FUNCTION) && (type != TOKEN_OPEN_PARENTHESIS)) {
+      result = MAKE_RESULT(PARSE_ERROR_EXPECTED_OPEN_PARENTHESIS, start_index);
+      CLEANUP_IF_FAILED(result);
+    }
 
     if (c == '\0') {
       // Reached the end of the string. Embedded nulls are not supported
@@ -203,24 +406,52 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
       result = parse_number(s, start_index, &len, &value);
       CLEANUP_IF_FAILED(result);
 
-      deque_result = add_token(*tokens, TOKEN_NUMBER, start_index, len, value);
+      deque_result = add_token(
+        *tokens,
+        TOKEN_NUMBER,
+        start_index,
+        len,
+        value,
+        nullptr);
       if (deque_result != 0) {
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
       }
 
       start_index += len;
+      last_type = TOKEN_NUMBER;
     } else if (type != TOKEN_UNKNOWN) {
-      deque_result = add_token(*tokens, type, start_index, 1, 0);
+      deque_result = add_token(*tokens, type, start_index, 1, 0, nullptr);
       if (deque_result != 0) {
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
       }
 
       ++start_index;
+      last_type = type;
     } else {
-      result = MAKE_RESULT(PARSE_ERROR_UNKNOWN_CHARACTER, start_index);
-      CLEANUP_IF_FAILED(result);
+      size_t len = symbol_length(s, start_index);
+
+      struct symbol_details details = get_symbol_details(s, start_index, len);
+      if (details.type == TOKEN_UNKNOWN) {
+        result = MAKE_RESULT(PARSE_ERROR_UNKNOWN_SYMBOL, start_index);
+        CLEANUP_IF_FAILED(result);
+      }
+
+      deque_result = add_token(
+        *tokens,
+        details.type,
+        start_index,
+        len,
+        details.value,
+        details.unary_eval);
+      if (deque_result != 0) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
+      }
+
+      start_index += len;
+      last_type = details.type;
     }
   }
 
@@ -252,14 +483,14 @@ struct parse_result add_implied_tokens(struct deque *tokens) {
           // Only include a token for unary minus since unary plus is the
           // identity function and can be ignored.
           if (current->type == TOKEN_MINUS) {
-            struct token *negate = malloc_token(TOKEN_NEGATE, current->start_index, current->len, 0);
-            if (negate == nullptr) {
+            struct token *tok = malloc_token(TOKEN_NEGATE, current->start_index, current->len, 0, negate);
+            if (tok == nullptr) {
               result = OOM_RESULT;
               CLEANUP_IF_FAILED(result);
             }
 
-            replace_iterator_data(&it, negate);
-            last_token = negate;
+            replace_iterator_data(&it, tok);
+            last_token = tok;
           } else {
             remove_at_and_backup_iterator(&it);
           }
@@ -294,21 +525,6 @@ enum ex_type {
   EX_NUMBER,
   EX_UNARY_OPERATION,
 };
-
-typedef double _Complex (*unary_operation)(double _Complex operand);
-
-double _Complex negate(double _Complex operand) {
-  return -operand;
-}
-
-unary_operation unary_operation_from_token(enum token_type type) {
-  switch (type) {
-    case TOKEN_NEGATE:
-      return negate;
-  }
-
-  return nullptr;
-}
 
 typedef double _Complex (*binary_operation)(double _Complex left, double _Complex right);
 
@@ -530,8 +746,18 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
         CLEANUP_IF_FAILED(result);
       }
 
+      if (right_child->start_index <= tok->start_index) {
+        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(result);
+      }
+
       left_child = deque_pop_back(top->expressions);
       if (left_child == nullptr) {
+        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(result);
+      }
+
+      if (left_child->start_index >= tok->start_index) {
         result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
         CLEANUP_IF_FAILED(result);
       }
@@ -557,14 +783,35 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
       break;
     
     case TOKEN_NEGATE:
+    case TOKEN_UNARY_FUNCTION:
       right_child = deque_pop_back(top->expressions);
       if (right_child == nullptr) {
         result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
         CLEANUP_IF_FAILED(result);
       }
 
+      if (right_child->start_index <= tok->start_index) {
+        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(result);
+      }
+
+      // Unary functions (and negate) need very large left bindings so that
+      // they can stack as in `--1`. A low left binding will cause the first
+      // negate to attempt to close itself immediately since the right binding
+      // is so high. Unfortunately this causes issues with statements like
+      // `-2 abs(3)` because the negate is unable to immediately bind with `2`
+      // due to the high left binding of `abs`. When it comes time to complete
+      // the negate the expression stack will be [`2`, `abs(3)`] and the negate
+      // will attempt to apply to `abs(3)` improperly. This check detects that
+      // case.
+      struct expression *other_child = deque_peek_back(top->expressions);
+      if ((other_child != nullptr) && (other_child->start_index > tok->start_index)) {
+        result = MAKE_RESULT(PARSE_ERROR_EXCESS_EXPRESSION, right_child->start_index);
+        CLEANUP_IF_FAILED(result);
+      }
+
       *ex = malloc_unary_operation_expression(
-        unary_operation_from_token(tok->type),
+        tok->unary_eval,
         right_child,
         tok->start_index,
         merge_expression_len(
