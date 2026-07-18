@@ -23,6 +23,7 @@ double _Complex LN2 = 0.6931471805599453;
 double _Complex PI = 3.1415926535897932;
 
 typedef double _Complex (*unary_operation)(double _Complex z);
+typedef double _Complex (*binary_operation)(double _Complex left, double _Complex right);
 
 double _Complex complex_abs(double _Complex z) {
   return cabs(z);
@@ -93,6 +94,10 @@ double _Complex cfrac(double _Complex z) {
     (cimag(z) - trunc(cimag(z))) * I;
 }
 
+double _Complex clog_with_base(double _Complex base, double _Complex z) {
+  return clog(z) / clog(base);
+}
+
 double _Complex clog10(double _Complex z) {
   return clog(z) / LN10;
 }
@@ -121,6 +126,22 @@ double _Complex csech(double _Complex z) {
   return csec(I * z);
 }
 
+double _Complex divide(double _Complex left, double _Complex right) {
+  return left / right;
+}
+
+double _Complex minus(double _Complex left, double _Complex right) {
+  return left - right;
+}
+
+double _Complex plus(double _Complex left, double _Complex right) {
+  return left + right;
+}
+
+double _Complex times(double _Complex left, double _Complex right) {
+  return left * right;
+}
+
 enum token_type {
   TOKEN_UNKNOWN,
   TOKEN_DIVIDE,
@@ -132,6 +153,8 @@ enum token_type {
   TOKEN_OPEN_PARENTHESIS,
   TOKEN_CLOSE_PARENTHESIS,
   TOKEN_UNARY_FUNCTION,
+  TOKEN_BINARY_FUNCTION,
+  TOKEN_COMMA,
 };
 
 struct token {
@@ -140,6 +163,7 @@ struct token {
   size_t len;
   double _Complex value;
   unary_operation unary_eval;
+  binary_operation binary_eval;
   unsigned char left_binding;
   unsigned char right_binding;
 };
@@ -161,6 +185,8 @@ const struct token_details TOKEN_DETAILS[] = {
   { TOKEN_OPEN_PARENTHESIS, 0, 0 },
   { TOKEN_CLOSE_PARENTHESIS, 0, 0 },
   { TOKEN_UNARY_FUNCTION, 99, 9 },
+  { TOKEN_BINARY_FUNCTION, 99, 9 },
+  { TOKEN_COMMA, 0, 0 },
 };
 
 struct token_details get_token_details(enum token_type type) {
@@ -181,33 +207,41 @@ bool is_token_unary_forcing(enum token_type type) {
     case TOKEN_PLUS:
     case TOKEN_TIMES:
     case TOKEN_OPEN_PARENTHESIS:
+    case TOKEN_COMMA:
       return true;
   }
 
   return false;
 }
 
+struct symbol_details {
+  const char *symbol;
+  size_t len;
+  enum token_type type;
+  double _Complex value;
+  unary_operation unary_eval;
+  binary_operation binary_eval;
+};
+
 struct token *malloc_token(
-  enum token_type type,
   size_t start_index,
-  size_t len,
-  double _Complex value,
-  unary_operation unary_eval
+  struct symbol_details details
 ) {
   struct token *tok = malloc(sizeof(struct token));
   if (tok == nullptr) {
     return tok;
   }
 
-  tok->type = type;
+  tok->type = details.type;
   tok->start_index = start_index;
-  tok->len = len;
-  tok->value = value;
-  tok->unary_eval = unary_eval;
+  tok->len = details.len;
+  tok->value = details.value;
+  tok->unary_eval = details.unary_eval;
+  tok->binary_eval = details.binary_eval;
 
-  struct token_details details = get_token_details(type);
-  tok->left_binding = details.left_binding;
-  tok->right_binding = details.right_binding;
+  struct token_details tok_details = get_token_details(details.type);
+  tok->left_binding = tok_details.left_binding;
+  tok->right_binding = tok_details.right_binding;
 
   return tok;
 }
@@ -264,6 +298,19 @@ struct parse_result parse_number(const char *s, size_t start_index, size_t *len,
 }
 
 size_t symbol_length(const char *s, size_t start_index) {
+  char first = s[start_index];
+  if (
+    (first == '/') ||
+    (first == '-') ||
+    (first == '+') ||
+    (first == '*') ||
+    (first == '(') ||
+    (first == ')') ||
+    (first == ',')
+  ) {
+    return 1;
+  }
+
   size_t len = 0;
   while (isalnum(s[start_index + len])) {
     ++len;
@@ -272,57 +319,63 @@ size_t symbol_length(const char *s, size_t start_index) {
   return len;
 }
 
-struct symbol_details {
-  const char *symbol;
-  size_t len;
-  enum token_type type;
-  double _Complex value;
-  unary_operation unary_eval;
-};
-
-#define MAKE_SYMBOL(symbol, type, value, unary_eval) { (symbol), (sizeof(symbol) - 1), (type), (value), (unary_eval) }
+#define MAKE_SYMBOL(symbol, type, value, unary_eval, binary_eval) { (symbol), (sizeof(symbol) - 1), (type), (value), (unary_eval), (binary_eval) }
+#define MAKE_NUMBER_SYMBOL(symbol, len, value) { (symbol), (len), TOKEN_NUMBER, (value) }
+#define MAKE_UNARY_SYMBOL(symbol, unary_eval) MAKE_SYMBOL(symbol, TOKEN_UNARY_FUNCTION, 0, unary_eval, nullptr)
+#define MAKE_BINARY_SYMBOL(symbol, binary_eval) MAKE_SYMBOL(symbol, TOKEN_BINARY_FUNCTION, 0, nullptr, binary_eval)
+#define MAKE_OPERATOR_SYMBOL(symbol, type, binary_eval) MAKE_SYMBOL(symbol, type, 0, nullptr, binary_eval)
+#define MAKE_SCOPE_SYMBOL(symbol, type) MAKE_SYMBOL(symbol, type, 0, nullptr, nullptr)
 
 const struct symbol_details SYMBOL_DETAILS[] = {
-  MAKE_SYMBOL("", TOKEN_UNKNOWN, 0, nullptr),
-  MAKE_SYMBOL("abs", TOKEN_UNARY_FUNCTION, 0, complex_abs),
-  MAKE_SYMBOL("arccos", TOKEN_UNARY_FUNCTION, 0, cacos),
-  MAKE_SYMBOL("arccosh", TOKEN_UNARY_FUNCTION, 0, cacosh),
-  MAKE_SYMBOL("arccot", TOKEN_UNARY_FUNCTION, 0, cacot),
-  MAKE_SYMBOL("arccoth", TOKEN_UNARY_FUNCTION, 0, cacoth),
-  MAKE_SYMBOL("arccsc", TOKEN_UNARY_FUNCTION, 0, cacsc),
-  MAKE_SYMBOL("arccsch", TOKEN_UNARY_FUNCTION, 0, cacsch),
-  MAKE_SYMBOL("arcsec", TOKEN_UNARY_FUNCTION, 0, casec),
-  MAKE_SYMBOL("arcsech", TOKEN_UNARY_FUNCTION, 0, casech),
-  MAKE_SYMBOL("arcsin", TOKEN_UNARY_FUNCTION, 0, casin),
-  MAKE_SYMBOL("arcsinh", TOKEN_UNARY_FUNCTION, 0, casinh),
-  MAKE_SYMBOL("arctan", TOKEN_UNARY_FUNCTION, 0, catan),
-  MAKE_SYMBOL("arctanh", TOKEN_UNARY_FUNCTION, 0, catanh),
-  MAKE_SYMBOL("arg", TOKEN_UNARY_FUNCTION, 0, complex_arg),
-  MAKE_SYMBOL("ceil", TOKEN_UNARY_FUNCTION, 0, cceil),
-  MAKE_SYMBOL("conj", TOKEN_UNARY_FUNCTION, 0, conj),
-  MAKE_SYMBOL("cos", TOKEN_UNARY_FUNCTION, 0, ccos),
-  MAKE_SYMBOL("cosh", TOKEN_UNARY_FUNCTION, 0, ccosh),
-  MAKE_SYMBOL("cot", TOKEN_UNARY_FUNCTION, 0, ccot),
-  MAKE_SYMBOL("coth", TOKEN_UNARY_FUNCTION, 0, ccoth),
-  MAKE_SYMBOL("csc", TOKEN_UNARY_FUNCTION, 0, ccsc),
-  MAKE_SYMBOL("csch", TOKEN_UNARY_FUNCTION, 0, ccsch),
-  MAKE_SYMBOL("exp", TOKEN_UNARY_FUNCTION, 0, cexp),
-  MAKE_SYMBOL("floor", TOKEN_UNARY_FUNCTION, 0, cfloor),
-  MAKE_SYMBOL("frac", TOKEN_UNARY_FUNCTION, 0, cfrac),
-  MAKE_SYMBOL("imag", TOKEN_UNARY_FUNCTION, 0, complex_imag),
-  MAKE_SYMBOL("log10", TOKEN_UNARY_FUNCTION, 0, clog10),
-  MAKE_SYMBOL("lg", TOKEN_UNARY_FUNCTION, 0, clog2),
-  MAKE_SYMBOL("ln", TOKEN_UNARY_FUNCTION, 0, clog),
-  MAKE_SYMBOL("nint", TOKEN_UNARY_FUNCTION, 0, cnint),
-  MAKE_SYMBOL("norm", TOKEN_UNARY_FUNCTION, 0, cnorm),
-  MAKE_SYMBOL("real", TOKEN_UNARY_FUNCTION, 0, complex_real),
-  MAKE_SYMBOL("sec", TOKEN_UNARY_FUNCTION, 0, csec),
-  MAKE_SYMBOL("sech", TOKEN_UNARY_FUNCTION, 0, csech),
-  MAKE_SYMBOL("sin", TOKEN_UNARY_FUNCTION, 0, csin),
-  MAKE_SYMBOL("sinh", TOKEN_UNARY_FUNCTION, 0, csinh),
-  MAKE_SYMBOL("sqrt", TOKEN_UNARY_FUNCTION, 0, csqrt),
-  MAKE_SYMBOL("tan", TOKEN_UNARY_FUNCTION, 0, ctan),
-  MAKE_SYMBOL("tanh", TOKEN_UNARY_FUNCTION, 0, ctanh),
+  MAKE_SYMBOL("", TOKEN_UNKNOWN, 0, nullptr, nullptr),
+  MAKE_UNARY_SYMBOL("abs", complex_abs),
+  MAKE_UNARY_SYMBOL("arccos", cacos),
+  MAKE_UNARY_SYMBOL("arccosh", cacosh),
+  MAKE_UNARY_SYMBOL("arccot", cacot),
+  MAKE_UNARY_SYMBOL("arccoth", cacoth),
+  MAKE_UNARY_SYMBOL("arccsc", cacsc),
+  MAKE_UNARY_SYMBOL("arccsch", cacsch),
+  MAKE_UNARY_SYMBOL("arcsec", casec),
+  MAKE_UNARY_SYMBOL("arcsech", casech),
+  MAKE_UNARY_SYMBOL("arcsin", casin),
+  MAKE_UNARY_SYMBOL("arcsinh", casinh),
+  MAKE_UNARY_SYMBOL("arctan", catan),
+  MAKE_UNARY_SYMBOL("arctanh", catanh),
+  MAKE_UNARY_SYMBOL("arg", complex_arg),
+  MAKE_UNARY_SYMBOL("ceil", cceil),
+  MAKE_UNARY_SYMBOL("conj", conj),
+  MAKE_UNARY_SYMBOL("cos", ccos),
+  MAKE_UNARY_SYMBOL("cosh", ccosh),
+  MAKE_UNARY_SYMBOL("cot", ccot),
+  MAKE_UNARY_SYMBOL("coth", ccoth),
+  MAKE_UNARY_SYMBOL("csc", ccsc),
+  MAKE_UNARY_SYMBOL("csch", ccsch),
+  MAKE_UNARY_SYMBOL("exp", cexp),
+  MAKE_UNARY_SYMBOL("floor", cfloor),
+  MAKE_UNARY_SYMBOL("frac", cfrac),
+  MAKE_UNARY_SYMBOL("imag", complex_imag),
+  MAKE_UNARY_SYMBOL("lg", clog2),
+  MAKE_UNARY_SYMBOL("ln", clog),
+  MAKE_BINARY_SYMBOL("log", clog_with_base),
+  MAKE_UNARY_SYMBOL("log10", clog10),
+  MAKE_UNARY_SYMBOL("nint", cnint),
+  MAKE_UNARY_SYMBOL("norm", cnorm),
+  MAKE_BINARY_SYMBOL("pow", cpow),
+  MAKE_UNARY_SYMBOL("real", complex_real),
+  MAKE_UNARY_SYMBOL("sec", csec),
+  MAKE_UNARY_SYMBOL("sech", csech),
+  MAKE_UNARY_SYMBOL("sin", csin),
+  MAKE_UNARY_SYMBOL("sinh", csinh),
+  MAKE_UNARY_SYMBOL("sqrt", csqrt),
+  MAKE_UNARY_SYMBOL("tan", ctan),
+  MAKE_UNARY_SYMBOL("tanh", ctanh),
+  MAKE_OPERATOR_SYMBOL("/", TOKEN_DIVIDE, divide),
+  MAKE_OPERATOR_SYMBOL("-", TOKEN_MINUS, minus),
+  MAKE_OPERATOR_SYMBOL("+", TOKEN_PLUS, plus),
+  MAKE_OPERATOR_SYMBOL("*", TOKEN_TIMES, times),
+  MAKE_SCOPE_SYMBOL("(", TOKEN_OPEN_PARENTHESIS),
+  MAKE_SCOPE_SYMBOL(")", TOKEN_CLOSE_PARENTHESIS),
+  MAKE_SCOPE_SYMBOL(",", TOKEN_COMMA),
 };
 
 struct symbol_details get_symbol_details(const char *s, size_t start_index, size_t len) {
@@ -340,13 +393,10 @@ struct symbol_details get_symbol_details(const char *s, size_t start_index, size
 
 int add_token(
   struct deque *tokens,
-  enum token_type type,
   size_t start_index,
-  size_t len,
-  double _Complex value,
-  unary_operation unary_eval
+  struct symbol_details details
 ) {
-  struct token *tok = malloc_token(type, start_index, len, value, unary_eval);
+  struct token *tok = malloc_token(start_index, details);
   if (tok == nullptr) {
     return -1;
   }
@@ -360,24 +410,6 @@ int add_token(
   return 0;
 }
 
-enum token_type token_type_from_char(char c) {
-  if (c == '/') {
-    return TOKEN_DIVIDE;
-  } else if (c == '-') {
-    return TOKEN_MINUS;
-  } else if (c == '+') {
-    return TOKEN_PLUS;
-  } else if (c == '*') {
-    return TOKEN_TIMES;
-  } else if (c == '(') {
-    return TOKEN_OPEN_PARENTHESIS;
-  } else if (c == ')') {
-    return TOKEN_CLOSE_PARENTHESIS;
-  }
-
-  return TOKEN_UNKNOWN;
-}
-
 struct parse_result tokenize(const char *s, struct deque **tokens) {
   *tokens = malloc_deque(token_deleter);
   size_t start_index = 0;
@@ -388,9 +420,13 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
   struct parse_result result = SUCCESS_RESULT;
   while (start_index < char_length) {
     int c = s[start_index];
-    enum token_type type = token_type_from_char(c);
 
-    if ((last_type == TOKEN_UNARY_FUNCTION) && (type != TOKEN_OPEN_PARENTHESIS)) {
+    size_t len = symbol_length(s, start_index);
+    struct symbol_details details = get_symbol_details(s, start_index, len);
+
+    bool was_function_last = (last_type == TOKEN_UNARY_FUNCTION) ||
+      (last_type == TOKEN_BINARY_FUNCTION);
+    if (was_function_last && (details.type != TOKEN_OPEN_PARENTHESIS)) {
       result = MAKE_RESULT(PARSE_ERROR_EXPECTED_OPEN_PARENTHESIS, start_index);
       CLEANUP_IF_FAILED(result);
     }
@@ -401,50 +437,23 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
     } else if (isspace(c)) {
       ++start_index;
     } else if (is_numeric_character(c)) {
-      size_t len;
+      size_t num_len;
       double _Complex value;
-      result = parse_number(s, start_index, &len, &value);
+      result = parse_number(s, start_index, &num_len, &value);
       CLEANUP_IF_FAILED(result);
 
-      deque_result = add_token(
-        *tokens,
-        TOKEN_NUMBER,
-        start_index,
-        len,
-        value,
-        nullptr);
+      struct symbol_details num_details = MAKE_NUMBER_SYMBOL(&s[start_index], num_len, value);
+
+      deque_result = add_token(*tokens, start_index, num_details);
       if (deque_result != 0) {
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
       }
 
-      start_index += len;
-      last_type = TOKEN_NUMBER;
-    } else if (type != TOKEN_UNKNOWN) {
-      deque_result = add_token(*tokens, type, start_index, 1, 0, nullptr);
-      if (deque_result != 0) {
-        result = OOM_RESULT;
-        CLEANUP_IF_FAILED(result);
-      }
-
-      ++start_index;
-      last_type = type;
-    } else {
-      size_t len = symbol_length(s, start_index);
-
-      struct symbol_details details = get_symbol_details(s, start_index, len);
-      if (details.type == TOKEN_UNKNOWN) {
-        result = MAKE_RESULT(PARSE_ERROR_UNKNOWN_SYMBOL, start_index);
-        CLEANUP_IF_FAILED(result);
-      }
-
-      deque_result = add_token(
-        *tokens,
-        details.type,
-        start_index,
-        len,
-        details.value,
-        details.unary_eval);
+      start_index += num_len;
+      last_type = num_details.type;
+    } else if (details.type != TOKEN_UNKNOWN) {
+      deque_result = add_token(*tokens, start_index, details);
       if (deque_result != 0) {
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
@@ -452,6 +461,9 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
 
       start_index += len;
       last_type = details.type;
+    } else {
+      result = MAKE_RESULT(PARSE_ERROR_UNKNOWN_SYMBOL, start_index);
+      CLEANUP_IF_FAILED(result);
     }
   }
 
@@ -483,7 +495,8 @@ struct parse_result add_implied_tokens(struct deque *tokens) {
           // Only include a token for unary minus since unary plus is the
           // identity function and can be ignored.
           if (current->type == TOKEN_MINUS) {
-            struct token *tok = malloc_token(TOKEN_NEGATE, current->start_index, current->len, 0, negate);
+            struct symbol_details details = MAKE_SYMBOL("-", TOKEN_NEGATE, 0, negate, nullptr);
+            struct token *tok = malloc_token(current->start_index, details);
             if (tok == nullptr) {
               result = OOM_RESULT;
               CLEANUP_IF_FAILED(result);
@@ -525,42 +538,6 @@ enum ex_type {
   EX_NUMBER,
   EX_UNARY_OPERATION,
 };
-
-typedef double _Complex (*binary_operation)(double _Complex left, double _Complex right);
-
-double _Complex divide(double _Complex left, double _Complex right) {
-  return left / right;
-}
-
-double _Complex minus(double _Complex left, double _Complex right) {
-  return left - right;
-}
-
-double _Complex plus(double _Complex left, double _Complex right) {
-  return left + right;
-}
-
-double _Complex times(double _Complex left, double _Complex right) {
-  return left * right;
-}
-
-binary_operation operation_from_operator(enum token_type type) {
-  switch (type) {
-    case TOKEN_DIVIDE:
-      return divide;
-
-    case TOKEN_MINUS:
-      return minus;
-    
-    case TOKEN_PLUS:
-      return plus;
-    
-    case TOKEN_TIMES:
-      return times;
-  }
-
-  return nullptr;
-}
 
 struct expression {
   enum ex_type type;
@@ -680,6 +657,7 @@ struct scope {
   struct deque *expressions;
   struct deque *operators;
   size_t start_index;
+  size_t open_start;
 };
 
 void free_scope(struct scope *s) {
@@ -689,13 +667,14 @@ void free_scope(struct scope *s) {
   free(s);
 }
 
-struct scope *malloc_scope(size_t start_index) {
+struct scope *malloc_scope(size_t start_index, size_t open_start) {
   struct scope *s = malloc(sizeof(struct scope));
   if (s == nullptr) {
     return nullptr;
   }
 
   s->start_index = start_index;
+  s->open_start = open_start;
   s->expressions = nullptr;
 
   // The scope does not own the operator tokens
@@ -721,6 +700,26 @@ void scope_deleter(void *data) {
   free_scope(s);
 }
 
+size_t expression_start_indices(
+  struct deque *expressions,
+  size_t start_after_index,
+  size_t *indices,
+  size_t count
+) {
+  size_t current_index = 0;
+  struct iterator it = iterator_for(expressions);
+
+  for (it; !is_end_iterator(it) && current_index < count; iterator_next(&it)) {
+    struct expression *ex = iterator_data(it);
+    if (ex->start_index > start_after_index) {
+      indices[current_index] = ex->start_index;
+      ++current_index;
+    }
+  }
+
+  return current_index;
+}
+
 struct parse_result malloc_expression(const struct scope *top, struct expression **ex) {
   *ex = nullptr;
 
@@ -732,6 +731,9 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
   struct parse_result result = SUCCESS_RESULT;
   struct expression *left_child = nullptr;
   struct expression *right_child = nullptr;
+
+  size_t start_indices[3];
+  size_t ex_count;
 
   struct token *tok = deque_pop_back(top->operators);
 
@@ -763,7 +765,40 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
       }
       
       *ex = malloc_binary_operation_expression(
-        operation_from_operator(tok->type),
+        tok->binary_eval,
+        left_child,
+        right_child,
+        left_child->start_index,
+        merge_expression_len(
+          left_child->start_index,
+          right_child->start_index,
+          right_child->len
+        )
+      );
+      if (*ex == nullptr) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
+      }
+
+      right_child = nullptr;
+      left_child = nullptr;
+      break;
+    
+    case TOKEN_BINARY_FUNCTION:
+      ex_count = expression_start_indices(top->expressions, tok->start_index, start_indices, 3);
+      if (ex_count < 2) {
+        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(result);
+      } else if (ex_count > 2) {
+        result = MAKE_RESULT(PARSE_ERROR_EXCESS_EXPRESSION, start_indices[2]);
+        CLEANUP_IF_FAILED(result);
+      }
+
+      right_child = deque_pop_back(top->expressions);
+      left_child = deque_pop_back(top->expressions);
+      
+      *ex = malloc_binary_operation_expression(
+        tok->binary_eval,
         left_child,
         right_child,
         left_child->start_index,
@@ -784,16 +819,16 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
     
     case TOKEN_NEGATE:
     case TOKEN_UNARY_FUNCTION:
-      right_child = deque_pop_back(top->expressions);
-      if (right_child == nullptr) {
+      ex_count = expression_start_indices(top->expressions, tok->start_index, start_indices, 2);
+      if (ex_count < 1) {
         result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
+        CLEANUP_IF_FAILED(result);
+      } else if (ex_count > 1) {
+        result = MAKE_RESULT(PARSE_ERROR_EXCESS_EXPRESSION, start_indices[1]);
         CLEANUP_IF_FAILED(result);
       }
 
-      if (right_child->start_index <= tok->start_index) {
-        result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
-        CLEANUP_IF_FAILED(result);
-      }
+      right_child = deque_pop_back(top->expressions);
 
       // Unary functions (and negate) need very large left bindings so that
       // they can stack as in `--1`. A low left binding will cause the first
@@ -909,7 +944,7 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
     CLEANUP_IF_FAILED(result);
   }
 
-  struct scope *top = malloc_scope(0);
+  struct scope *top = malloc_scope(0, 0);
   if (top == nullptr) {
     result = OOM_RESULT;
     CLEANUP_IF_FAILED(result);
@@ -926,16 +961,22 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
     struct token *tok = iterator_data(it);
 
     if (tok->type == TOKEN_OPEN_PARENTHESIS) {
-      struct scope *new_top = malloc_scope(tok->start_index);
+      struct scope *new_top = malloc_scope(tok->start_index, tok->start_index);
       deque_result = deque_push_back(stack, new_top);
       if (deque_result != 0) {
         free_scope(new_top);
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
       }
-    } else if (tok->type == TOKEN_CLOSE_PARENTHESIS) {
+    } else if (
+      (tok->type == TOKEN_CLOSE_PARENTHESIS) ||
+      (tok->type == TOKEN_COMMA)
+    ) {
       if (deque_len(stack) == 1) {
-        result = MAKE_RESULT(PARSE_ERROR_EXCESS_CLOSE_PARENTHESIS, tok->start_index);
+        enum parse_error_type error_type = tok->type == TOKEN_COMMA ?
+          PARSE_ERROR_INCOMPLETE_EXPRESSION :
+          PARSE_ERROR_EXCESS_CLOSE_PARENTHESIS;
+        result = MAKE_RESULT(error_type, tok->start_index);
         CLEANUP_IF_FAILED(result);
       }
 
@@ -945,6 +986,7 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
       result = close_scope(top, &ex);
       CLEANUP_IF_FAILED(result);
 
+      size_t open_start = top->open_start;
       top = deque_pop_back(stack);
       free_scope(top);
       top = deque_peek_back(stack);
@@ -954,6 +996,23 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
         free_expression(ex);
         result = OOM_RESULT;
         CLEANUP_IF_FAILED(result);
+      }
+
+      if (tok->type == TOKEN_COMMA) {
+        struct scope *new_top = malloc_scope(tok->start_index, open_start);
+        deque_result = deque_push_back(stack, new_top);
+        if (deque_result != 0) {
+          free_scope(new_top);
+          result = OOM_RESULT;
+          CLEANUP_IF_FAILED(result);
+        }
+      } else {
+        struct token *top_op = deque_peek_back(top->operators);
+        enum token_type type = top_op != nullptr ? top_op->type : TOKEN_UNKNOWN;
+        if (type == TOKEN_BINARY_FUNCTION) {
+          result = resolve_operator(top);
+          CLEANUP_IF_FAILED(result);
+        }
       }
     } else {
       top = deque_peek_back(stack);
@@ -978,7 +1037,7 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
 
   top = deque_peek_back(stack);
   if (deque_len(stack) > 1) {
-    result = MAKE_RESULT(PARSE_ERROR_UNMATCHED_OPEN_PARENTHESIS, top->start_index);
+    result = MAKE_RESULT(PARSE_ERROR_UNMATCHED_OPEN_PARENTHESIS, top->open_start);
     CLEANUP_IF_FAILED(result);
   }
 
