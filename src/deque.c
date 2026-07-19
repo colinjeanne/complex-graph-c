@@ -206,6 +206,31 @@ void *iterator_next(struct iterator *it) {
   return iterator_data(*it);
 }
 
+int deque_insert_before(struct iterator it, void *data) {
+  if (it.is_before_beginning) {
+    return -1;
+  }
+
+  if (it.item == it.d->head) {
+    return deque_push_front(it.d, data);
+  }
+
+  struct deque_item *item = malloc_deque_item(data);
+  if (item == nullptr) {
+    return -1;
+  }
+
+  struct deque_item *prev = it.item->prev;
+  item->prev = prev;
+  item->next = it.item;
+  prev->next = item;
+  it.item->prev = item;
+  
+  ++it.d->len;
+
+  return 0;
+}
+
 void *remove_at_and_backup_iterator(struct iterator *it) {
   struct deque_item *old_item = it->item;
   void *data = old_item->data;

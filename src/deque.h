@@ -32,6 +32,7 @@ bool is_end_iterator(struct iterator it);
 void *iterator_data(struct iterator it);
 void *iterator_next(struct iterator *it);
 
+int deque_insert_before(struct iterator it, void *data);
 void *remove_at_and_backup_iterator(struct iterator *it);
 void *replace_iterator_data(struct iterator *it, void *data);
 

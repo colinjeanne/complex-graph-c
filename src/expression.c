@@ -155,6 +155,7 @@ enum token_type {
   TOKEN_UNARY_FUNCTION,
   TOKEN_BINARY_FUNCTION,
   TOKEN_COMMA,
+  TOKEN_INVISIBLE_TIMES,
 };
 
 struct token {
@@ -178,15 +179,16 @@ const struct token_details TOKEN_DETAILS[] = {
   { TOKEN_UNKNOWN, 0, 0 },
   { TOKEN_DIVIDE, 7, 8 },
   { TOKEN_MINUS, 5, 6 },
-  { TOKEN_NEGATE, 99, 9 },
+  { TOKEN_NEGATE, 99, 50 },
   { TOKEN_NUMBER, 254, 255 },
   { TOKEN_PLUS, 5, 6 },
   { TOKEN_TIMES, 7, 8 },
   { TOKEN_OPEN_PARENTHESIS, 0, 0 },
   { TOKEN_CLOSE_PARENTHESIS, 0, 0 },
-  { TOKEN_UNARY_FUNCTION, 99, 9 },
-  { TOKEN_BINARY_FUNCTION, 99, 9 },
+  { TOKEN_UNARY_FUNCTION, 99, 50 },
+  { TOKEN_BINARY_FUNCTION, 99, 50 },
   { TOKEN_COMMA, 0, 0 },
+  { TOKEN_INVISIBLE_TIMES, 9, 10 },
 };
 
 struct token_details get_token_details(enum token_type type) {
@@ -209,6 +211,21 @@ bool is_token_unary_forcing(enum token_type type) {
     case TOKEN_OPEN_PARENTHESIS:
     case TOKEN_COMMA:
       return true;
+  }
+
+  return false;
+}
+
+bool is_times_implied(enum token_type left_token, enum token_type right_token) {
+  if (left_token == TOKEN_NUMBER) {
+    return (right_token == TOKEN_OPEN_PARENTHESIS) ||
+      (right_token == TOKEN_UNARY_FUNCTION) ||
+      (right_token == TOKEN_BINARY_FUNCTION);
+  } else if (left_token == TOKEN_CLOSE_PARENTHESIS) {
+    return (right_token == TOKEN_OPEN_PARENTHESIS) ||
+      (right_token == TOKEN_UNARY_FUNCTION) ||
+      (right_token == TOKEN_BINARY_FUNCTION) ||
+      (right_token == TOKEN_NUMBER);
   }
 
   return false;
@@ -485,6 +502,26 @@ struct parse_result add_implied_tokens(struct deque *tokens) {
     struct token *current = iterator_data(it);
     int deque_result;
 
+    if (
+      (last_token != nullptr) &&
+      is_times_implied(last_token->type, current->type)
+    ) {
+      struct symbol_details details = MAKE_OPERATOR_SYMBOL("", TOKEN_INVISIBLE_TIMES, times);
+      struct token *tok = malloc_token(current->start_index, details);
+      if (tok == nullptr) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
+      }
+
+      deque_result = deque_insert_before(it, tok);
+      if (deque_result != 0) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
+      }
+
+      last_token = tok;
+    }
+
     switch (current->type) {
       case TOKEN_MINUS:
       case TOKEN_PLUS:
@@ -742,13 +779,14 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
     case TOKEN_MINUS:
     case TOKEN_PLUS:
     case TOKEN_TIMES:
+    case TOKEN_INVISIBLE_TIMES:
       right_child = deque_pop_back(top->expressions);
       if (right_child == nullptr) {
         result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
         CLEANUP_IF_FAILED(result);
       }
 
-      if (right_child->start_index <= tok->start_index) {
+      if (right_child->start_index < tok->start_index) {
         result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
         CLEANUP_IF_FAILED(result);
       }
@@ -759,7 +797,7 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
         CLEANUP_IF_FAILED(result);
       }
 
-      if (left_child->start_index >= tok->start_index) {
+      if (left_child->start_index > tok->start_index) {
         result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, tok->start_index);
         CLEANUP_IF_FAILED(result);
       }
