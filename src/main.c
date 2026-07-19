@@ -12,7 +12,8 @@ int main(void) {
     return -1;
   }
 
-  double complex r = evaluate_expression(ex);
+  double complex r;
+  struct eval_result ev_result = evaluate_expression(ex, nullptr, 0, &r);
   free_expression(ex);
   printf("%f, %f\n", creal(r), cimag(r));
 }

@@ -17,6 +17,7 @@
 
 const struct parse_result SUCCESS_RESULT = { PARSE_ERROR_SUCCESS, 0 };
 const struct parse_result OOM_RESULT = { PARSE_ERROR_OOM, 0 };
+const struct eval_result SUCCESS_EVAL_RESULT = { EVAL_ERROR_SUCCESS };
 
 #define LN10 2.30258509299404568
 #define LN2 0.6931471805599453
@@ -157,6 +158,7 @@ enum token_type {
   TOKEN_BINARY_FUNCTION,
   TOKEN_COMMA,
   TOKEN_INVISIBLE_TIMES,
+  TOKEN_VARIABLE,
 };
 
 struct token {
@@ -190,6 +192,7 @@ const struct token_details TOKEN_DETAILS[] = {
   { TOKEN_BINARY_FUNCTION, 99, 50 },
   { TOKEN_COMMA, 0, 0 },
   { TOKEN_INVISIBLE_TIMES, 9, 10 },
+  { TOKEN_VARIABLE, 254, 255 },
 };
 
 struct token_details get_token_details(enum token_type type) {
@@ -222,10 +225,14 @@ bool is_token_unary_forcing(enum token_type type) {
 }
 
 bool is_times_implied(const char *s, struct token *left_token, struct token *right_token) {
-  if (left_token->type == TOKEN_NUMBER) {
+  if (
+    (left_token->type == TOKEN_NUMBER) ||
+    (left_token->type == TOKEN_VARIABLE)
+  ) {
     if (
+      (left_token->type == TOKEN_NUMBER) &&
       is_numeric_character(s[left_token->start_index]) &&
-      (right_token->type == TOKEN_NUMBER) &&
+      ((right_token->type == TOKEN_NUMBER) || (right_token->type == TOKEN_VARIABLE)) &&
       !is_numeric_character(s[right_token->start_index])
     ) {
       return true;
@@ -238,7 +245,8 @@ bool is_times_implied(const char *s, struct token *left_token, struct token *rig
     return (right_token->type == TOKEN_OPEN_PARENTHESIS) ||
       (right_token->type == TOKEN_UNARY_FUNCTION) ||
       (right_token->type == TOKEN_BINARY_FUNCTION) ||
-      (right_token->type == TOKEN_NUMBER);
+      (right_token->type == TOKEN_NUMBER) ||
+      (right_token->type == TOKEN_VARIABLE);
   }
 
   return false;
@@ -347,6 +355,7 @@ size_t symbol_length(const char *s, size_t start_index) {
 
 #define MAKE_SYMBOL(symbol, type, value, unary_eval, binary_eval) { (symbol), (sizeof(symbol) - 1), (type), (value), (unary_eval), (binary_eval) }
 #define MAKE_NUMBER_SYMBOL(symbol, len, value) { (symbol), (len), TOKEN_NUMBER, (value) }
+#define MAKE_VARIABLE_SYMBOL(symbol, len) { (symbol), (len), TOKEN_VARIABLE }
 #define MAKE_UNARY_SYMBOL(symbol, unary_eval) MAKE_SYMBOL(symbol, TOKEN_UNARY_FUNCTION, 0, unary_eval, nullptr)
 #define MAKE_BINARY_SYMBOL(symbol, binary_eval) MAKE_SYMBOL(symbol, TOKEN_BINARY_FUNCTION, 0, nullptr, binary_eval)
 #define MAKE_OPERATOR_SYMBOL(symbol, type, binary_eval) MAKE_SYMBOL(symbol, type, 0, nullptr, binary_eval)
@@ -491,8 +500,16 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
       start_index += len;
       last_type = details.type;
     } else {
-      result = MAKE_RESULT(PARSE_ERROR_UNKNOWN_SYMBOL, start_index);
-      CLEANUP_IF_FAILED(result);
+      struct symbol_details var_details = MAKE_VARIABLE_SYMBOL(&s[start_index], len);
+
+      deque_result = add_token(*tokens, start_index, var_details);
+      if (deque_result != 0) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
+      }
+
+      start_index += len;
+      last_type = var_details.type;
     }
   }
 
@@ -561,7 +578,11 @@ struct parse_result add_implied_tokens(const char *s, struct deque *tokens) {
         break;
       
       case TOKEN_NUMBER:
-        if ((last_token != nullptr) && (last_token->type == TOKEN_NUMBER)) {
+      case TOKEN_VARIABLE:
+        if (
+          (last_token != nullptr) &&
+          ((last_token->type == TOKEN_NUMBER) || (last_token->type == TOKEN_VARIABLE))
+        ) {
           result = MAKE_RESULT(PARSE_ERROR_EXCESS_EXPRESSION, current->start_index);
           CLEANUP_IF_FAILED(result);
         }
@@ -583,6 +604,7 @@ enum ex_type {
   EX_BINARY_OPERATION,
   EX_NUMBER,
   EX_UNARY_OPERATION,
+  EX_VARIABLE,
 };
 
 struct expression {
@@ -591,6 +613,7 @@ struct expression {
   size_t len;
   union {
     double _Complex value;
+    char *symbol;
     struct {
       struct expression *left_child;
       struct expression *right_child;
@@ -617,8 +640,53 @@ struct expression *malloc_number_expression(double _Complex value, size_t start_
   return ex;
 }
 
-double _Complex evaluate_number_expression(const struct expression *ex) {
-  return ex->value;
+struct eval_result evaluate_number_expression(
+  const struct expression *ex,
+  const struct variable_value *variables,
+  size_t variable_count,
+  double _Complex *result
+) {
+  *result = ex->value;
+  return SUCCESS_EVAL_RESULT;
+}
+
+struct expression *malloc_variable_expression(const char *s, size_t start_index, size_t len) {
+  struct expression *ex = malloc(sizeof(struct expression));
+  if (ex == nullptr) {
+    return nullptr;
+  }
+
+  ex->type = EX_VARIABLE;
+  ex->start_index = start_index;
+  ex->len = len;
+  ex->symbol = malloc(len);
+  if (ex->symbol == nullptr) {
+    free_expression(ex);
+    return nullptr;
+  }
+
+  strncpy(ex->symbol, (s + start_index), len);
+
+  return ex;
+}
+
+struct eval_result evaluate_variable_expression(
+  const struct expression *ex,
+  const struct variable_value *variables,
+  size_t variable_count,
+  double _Complex *result
+) {
+  for (size_t i = 0; i < variable_count; ++i) {
+    if (
+      (ex->len == variables[i].len) &&
+      (strncmp(ex->symbol, variables[i].symbol, ex->len) == 0)
+    ) {
+      *result = variables[i].value;
+      return SUCCESS_EVAL_RESULT;
+    }
+  }
+  
+  return (struct eval_result) { EVAL_ERROR_UNKNOWN_VARIABLE, ex->start_index };
 }
 
 struct expression *malloc_binary_operation_expression(
@@ -643,8 +711,38 @@ struct expression *malloc_binary_operation_expression(
   return ex;
 }
 
-double _Complex evaluate_binary_operation_expression(const struct expression *ex) {
-  return ex->binary_eval(evaluate_expression(ex->left_child), evaluate_expression(ex->right_child));
+struct eval_result evaluate_binary_operation_expression(
+  const struct expression *ex,
+  const struct variable_value *variables,
+  size_t variable_count,
+  double _Complex *result
+) {
+  double _Complex left_value;
+  struct eval_result ev_result = evaluate_expression(
+    ex->left_child,
+    variables,
+    variable_count,
+    &left_value
+  );
+
+  if (ev_result.type != EVAL_ERROR_SUCCESS) {
+    return ev_result;
+  }
+
+  double _Complex right_value;
+  ev_result = evaluate_expression(
+    ex->right_child,
+    variables,
+    variable_count,
+    &right_value
+  );
+
+  if (ev_result.type != EVAL_ERROR_SUCCESS) {
+    return ev_result;
+  }
+
+  *result = ex->binary_eval(left_value, right_value);
+  return SUCCESS_EVAL_RESULT;
 }
 
 struct expression *malloc_unary_operation_expression(
@@ -667,8 +765,26 @@ struct expression *malloc_unary_operation_expression(
   return ex;
 }
 
-double _Complex evaluate_unary_operation_expression(const struct expression *ex) {
-  return ex->unary_eval(evaluate_expression(ex->operand));
+struct eval_result evaluate_unary_operation_expression(
+  const struct expression *ex,
+  const struct variable_value *variables,
+  size_t variable_count,
+  double _Complex *result
+) {
+  double _Complex value;
+  struct eval_result ev_result = evaluate_expression(
+    ex->left_child,
+    variables,
+    variable_count,
+    &value
+  );
+
+  if (ev_result.type != EVAL_ERROR_SUCCESS) {
+    return ev_result;
+  }
+
+  *result = ex->unary_eval(value);
+  return SUCCESS_EVAL_RESULT;
 }
 
 void free_expression(struct expression *ex) {
@@ -684,6 +800,10 @@ void free_expression(struct expression *ex) {
     
     case EX_UNARY_OPERATION:
       free(ex->operand);
+      break;
+    
+    case EX_VARIABLE:
+      free(ex->symbol);
       break;
   }
 
@@ -766,7 +886,7 @@ size_t expression_start_indices(
   return current_index;
 }
 
-struct parse_result malloc_expression(const struct scope *top, struct expression **ex) {
+struct parse_result malloc_expression(const char *s, const struct scope *top, struct expression **ex) {
   *ex = nullptr;
 
   if (top == nullptr) {
@@ -917,6 +1037,14 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
         CLEANUP_IF_FAILED(result);
       }
       break;
+    
+    case TOKEN_VARIABLE:
+      *ex = malloc_variable_expression(s, tok->start_index, tok->len);
+      if (*ex == nullptr) {
+        result = OOM_RESULT;
+        CLEANUP_IF_FAILED(result);
+      }
+      break;
   }
 
   cleanup:
@@ -926,16 +1054,16 @@ struct parse_result malloc_expression(const struct scope *top, struct expression
   return result;
 }
 
-struct parse_result resolve_operator(struct scope *s) {
+struct parse_result resolve_operator(const char *s, struct scope *sc) {
   struct expression *ex = nullptr;
-  struct parse_result result = malloc_expression(s, &ex);
+  struct parse_result result = malloc_expression(s, sc, &ex);
   CLEANUP_IF_FAILED(result);
 
   if (ex == nullptr) {
     return result;
   }
 
-  int deque_result = deque_push_back(s->expressions, ex);
+  int deque_result = deque_push_back(sc->expressions, ex);
   if (deque_result != 0) {
     result = OOM_RESULT;
     CLEANUP_IF_FAILED(result);
@@ -949,25 +1077,25 @@ struct parse_result resolve_operator(struct scope *s) {
   return result;
 }
 
-struct parse_result close_scope(struct scope *s, struct expression **ex) {
+struct parse_result close_scope(const char *s, struct scope *sc, struct expression **ex) {
   *ex = nullptr;
 
   struct parse_result result = SUCCESS_RESULT;
-  while (deque_len(s->operators) > 0) {
-    result = resolve_operator(s);
+  while (deque_len(sc->operators) > 0) {
+    result = resolve_operator(s, sc);
     CLEANUP_IF_FAILED(result);
   }
 
-  *ex = deque_pop_front(s->expressions);
+  *ex = deque_pop_front(sc->expressions);
   if (*ex == nullptr) {
-    result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, s->start_index);
+    result = MAKE_RESULT(PARSE_ERROR_INCOMPLETE_EXPRESSION, sc->start_index);
     CLEANUP_IF_FAILED(result);
   }
 
   // Expand scope to include the opening parenthesis
-  (*ex)->start_index = s->start_index;
+  (*ex)->start_index = sc->start_index;
 
-  struct expression *rest = deque_peek_front(s->expressions);
+  struct expression *rest = deque_peek_front(sc->expressions);
   if (rest != nullptr) {
     free_expression(*ex);
     ex = nullptr;
@@ -1030,7 +1158,7 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
       struct expression *ex;
       top = deque_peek_back(stack);
 
-      result = close_scope(top, &ex);
+      result = close_scope(s, top, &ex);
       CLEANUP_IF_FAILED(result);
 
       size_t open_start = top->open_start;
@@ -1057,7 +1185,7 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
         struct token *top_op = deque_peek_back(top->operators);
         enum token_type type = top_op != nullptr ? top_op->type : TOKEN_UNKNOWN;
         if (type == TOKEN_BINARY_FUNCTION) {
-          result = resolve_operator(top);
+          result = resolve_operator(s, top);
           CLEANUP_IF_FAILED(result);
         }
       }
@@ -1067,7 +1195,7 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
       unsigned char right_binding = top_op != nullptr ? top_op->right_binding : 0;
 
       while (right_binding > tok->left_binding) {
-        result = resolve_operator(top);
+        result = resolve_operator(s, top);
         CLEANUP_IF_FAILED(result);
 
         top_op = deque_peek_back(top->operators);
@@ -1088,7 +1216,7 @@ struct parse_result build_parse_tree(const char *s, struct deque *tokens, struct
     CLEANUP_IF_FAILED(result);
   }
 
-  result = close_scope(top, root);
+  result = close_scope(s, top, root);
   CLEANUP_IF_FAILED(result);
 
   cleanup:
@@ -1125,17 +1253,45 @@ struct parse_result make_expression(const char *s, struct expression **ex) {
   return result;
 }
 
-double _Complex evaluate_expression(const struct expression *ex) {
+struct eval_result evaluate_expression(
+  const struct expression *ex,
+  const struct variable_value *variables,
+  size_t variable_count,
+  double _Complex *result
+) {
   switch (ex->type) {
     case EX_BINARY_OPERATION:
-      return evaluate_binary_operation_expression(ex);
+      return evaluate_binary_operation_expression(
+        ex,
+        variables,
+        variable_count,
+        result
+      );
 
     case EX_NUMBER:
-      return evaluate_number_expression(ex);
+      return evaluate_number_expression(
+        ex,
+        variables,
+        variable_count,
+        result
+      );
     
     case EX_UNARY_OPERATION:
-      return evaluate_unary_operation_expression(ex);
+      return evaluate_unary_operation_expression(
+        ex,
+        variables,
+        variable_count,
+        result
+      );
+    
+    case EX_VARIABLE:
+      return evaluate_variable_expression(
+        ex,
+        variables,
+        variable_count,
+        result
+      );
   }
 
-  return 0;
+  return SUCCESS_EVAL_RESULT;
 }
