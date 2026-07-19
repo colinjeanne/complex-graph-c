@@ -18,9 +18,10 @@
 const struct parse_result SUCCESS_RESULT = { PARSE_ERROR_SUCCESS, 0 };
 const struct parse_result OOM_RESULT = { PARSE_ERROR_OOM, 0 };
 
-double _Complex LN10 = 2.30258509299404568;
-double _Complex LN2 = 0.6931471805599453;
-double _Complex PI = 3.1415926535897932;
+#define LN10 2.30258509299404568
+#define LN2 0.6931471805599453
+#define PI 3.1415926535897932
+#define E 2.7182818284590452
 
 typedef double _Complex (*unary_operation)(double _Complex z);
 typedef double _Complex (*binary_operation)(double _Complex left, double _Complex right);
@@ -201,6 +202,10 @@ struct token_details get_token_details(enum token_type type) {
   return TOKEN_DETAILS[0];
 }
 
+bool is_numeric_character(char c) {
+  return (c == '.') || isdigit(c);
+}
+
 bool is_token_unary_forcing(enum token_type type) {
   switch (type) {
     case TOKEN_DIVIDE:
@@ -216,16 +221,24 @@ bool is_token_unary_forcing(enum token_type type) {
   return false;
 }
 
-bool is_times_implied(enum token_type left_token, enum token_type right_token) {
-  if (left_token == TOKEN_NUMBER) {
-    return (right_token == TOKEN_OPEN_PARENTHESIS) ||
-      (right_token == TOKEN_UNARY_FUNCTION) ||
-      (right_token == TOKEN_BINARY_FUNCTION);
-  } else if (left_token == TOKEN_CLOSE_PARENTHESIS) {
-    return (right_token == TOKEN_OPEN_PARENTHESIS) ||
-      (right_token == TOKEN_UNARY_FUNCTION) ||
-      (right_token == TOKEN_BINARY_FUNCTION) ||
-      (right_token == TOKEN_NUMBER);
+bool is_times_implied(const char *s, struct token *left_token, struct token *right_token) {
+  if (left_token->type == TOKEN_NUMBER) {
+    if (
+      is_numeric_character(s[left_token->start_index]) &&
+      (right_token->type == TOKEN_NUMBER) &&
+      !is_numeric_character(s[right_token->start_index])
+    ) {
+      return true;
+    }
+
+    return (right_token->type == TOKEN_OPEN_PARENTHESIS) ||
+      (right_token->type == TOKEN_UNARY_FUNCTION) ||
+      (right_token->type == TOKEN_BINARY_FUNCTION);
+  } else if (left_token->type == TOKEN_CLOSE_PARENTHESIS) {
+    return (right_token->type == TOKEN_OPEN_PARENTHESIS) ||
+      (right_token->type == TOKEN_UNARY_FUNCTION) ||
+      (right_token->type == TOKEN_BINARY_FUNCTION) ||
+      (right_token->type == TOKEN_NUMBER);
   }
 
   return false;
@@ -270,10 +283,6 @@ void free_token(struct token *tok) {
 void token_deleter(void *data) {
   struct token *tok = (struct token *)data;
   free_token(tok);
-}
-
-bool is_numeric_character(char c) {
-  return (c == '.') || isdigit(c);
 }
 
 struct parse_result parse_number(const char *s, size_t start_index, size_t *len, double _Complex *value) {
@@ -373,11 +382,9 @@ const struct symbol_details SYMBOL_DETAILS[] = {
   MAKE_UNARY_SYMBOL("imag", complex_imag),
   MAKE_UNARY_SYMBOL("lg", clog2),
   MAKE_UNARY_SYMBOL("ln", clog),
-  MAKE_BINARY_SYMBOL("log", clog_with_base),
   MAKE_UNARY_SYMBOL("log10", clog10),
   MAKE_UNARY_SYMBOL("nint", cnint),
   MAKE_UNARY_SYMBOL("norm", cnorm),
-  MAKE_BINARY_SYMBOL("pow", cpow),
   MAKE_UNARY_SYMBOL("real", complex_real),
   MAKE_UNARY_SYMBOL("sec", csec),
   MAKE_UNARY_SYMBOL("sech", csech),
@@ -386,6 +393,8 @@ const struct symbol_details SYMBOL_DETAILS[] = {
   MAKE_UNARY_SYMBOL("sqrt", csqrt),
   MAKE_UNARY_SYMBOL("tan", ctan),
   MAKE_UNARY_SYMBOL("tanh", ctanh),
+  MAKE_BINARY_SYMBOL("log", clog_with_base),
+  MAKE_BINARY_SYMBOL("pow", cpow),
   MAKE_OPERATOR_SYMBOL("/", TOKEN_DIVIDE, divide),
   MAKE_OPERATOR_SYMBOL("-", TOKEN_MINUS, minus),
   MAKE_OPERATOR_SYMBOL("+", TOKEN_PLUS, plus),
@@ -393,6 +402,9 @@ const struct symbol_details SYMBOL_DETAILS[] = {
   MAKE_SCOPE_SYMBOL("(", TOKEN_OPEN_PARENTHESIS),
   MAKE_SCOPE_SYMBOL(")", TOKEN_CLOSE_PARENTHESIS),
   MAKE_SCOPE_SYMBOL(",", TOKEN_COMMA),
+  MAKE_NUMBER_SYMBOL("e", 1, E),
+  MAKE_NUMBER_SYMBOL("i", 1, I),
+  MAKE_NUMBER_SYMBOL("pi", 2, PI),
 };
 
 struct symbol_details get_symbol_details(const char *s, size_t start_index, size_t len) {
@@ -489,7 +501,7 @@ struct parse_result tokenize(const char *s, struct deque **tokens) {
   return result;
 }
 
-struct parse_result add_implied_tokens(struct deque *tokens) {
+struct parse_result add_implied_tokens(const char *s, struct deque *tokens) {
   if (tokens == nullptr) {
     return SUCCESS_RESULT;
   }
@@ -502,10 +514,7 @@ struct parse_result add_implied_tokens(struct deque *tokens) {
     struct token *current = iterator_data(it);
     int deque_result;
 
-    if (
-      (last_token != nullptr) &&
-      is_times_implied(last_token->type, current->type)
-    ) {
+    if ((last_token != nullptr) && is_times_implied(s, last_token, current)) {
       struct symbol_details details = MAKE_OPERATOR_SYMBOL("", TOKEN_INVISIBLE_TIMES, times);
       struct token *tok = malloc_token(current->start_index, details);
       if (tok == nullptr) {
@@ -581,7 +590,7 @@ struct expression {
   size_t start_index;
   size_t len;
   union {
-    double value;
+    double _Complex value;
     struct {
       struct expression *left_child;
       struct expression *right_child;
@@ -594,7 +603,7 @@ struct expression {
   };
 };
 
-struct expression *malloc_number_expression(double value, size_t start_index, size_t len) {
+struct expression *malloc_number_expression(double _Complex value, size_t start_index, size_t len) {
   struct expression *ex = malloc(sizeof(struct expression));
   if (ex == nullptr) {
     return nullptr;
@@ -1098,7 +1107,7 @@ struct parse_result make_expression(const char *s, struct expression **ex) {
   result = tokenize(s, &tokens);
   CLEANUP_IF_FAILED(result);
 
-  result = add_implied_tokens(tokens);
+  result = add_implied_tokens(s, tokens);
   CLEANUP_IF_FAILED(result);
 
   struct expression *root;
