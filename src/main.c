@@ -1,9 +1,11 @@
 #include <complex.h>
+#include <ctype.h>
 #include <math.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <png.h>
+#include <unistd.h>
 
 #include "expression.h"
 
@@ -86,10 +88,7 @@ rgb hsl_to_rgb(double h, double s, double v) {
   return color;
 }
 
-int width = 400;
-int height = 400;
-
-int calculate_values(const char *s, double _Complex **values, double *max_abs) {
+int calculate_values(const char *s, int width, int height, double _Complex **values, double *max_abs) {
   struct expression *ex = nullptr;
   *values = nullptr;
 
@@ -183,7 +182,93 @@ png_bytepp build_image_data(
   return row_ptr;
 }
 
-int main(void) {
+int parse_positive_int(const char *s) {
+  int i = 0;
+  for (int index = 0; s[index] != '\0'; ++index) {
+    if (!isdigit(s[index])) {
+      return -1;
+    }
+
+    i *= 10;
+    i += (s[index] - '0');
+  }
+
+  return i;
+}
+
+struct options {
+  int width;
+  int height;
+  char *s;
+  char *out_file;
+};
+
+int get_options(int argc, char **argv, struct options *opts) {
+  opts->width = -1;
+  opts->height = -1;
+  opts->s = nullptr;
+  opts->out_file = nullptr;
+
+  int opt;
+  while ((opt = getopt(argc, argv, "w:h:f:")) != -1) {
+    switch (opt) {
+      case 'w':
+        opts->width = parse_positive_int(optarg);
+        if (opts->width <= 0) {
+          fprintf(stderr, "Invalid width: %s\n", optarg);
+          goto usage;
+        }
+        break;
+
+      case 'h':
+        opts->height = parse_positive_int(optarg);
+        if (opts->height <= 0) {
+          fprintf(stderr, "Invalid height: %s\n", optarg);
+          goto usage;
+        }
+        break;
+      
+      case 'f':
+        opts->s = optarg;
+        break;
+      
+      default:
+        goto usage;
+    }
+  }
+
+  if (optind == argc - 1) {
+    opts->out_file = argv[optind];
+  }
+
+  if (
+    (opts->width > 0) &&
+    (opts->height > 0) &&
+    (opts->s != nullptr) &&
+    (opts->out_file != nullptr)
+  ) {
+    return 0;
+  }
+
+  usage:
+  fprintf(
+    stderr,
+    "Usage: complex-graph -w width -h height -f function out_file\n"
+    "  w:        The width of the image in pixels\n"
+    "  h:        The height of the image in pixels\n"
+    "  f:        The function to graph in the variable z\n"
+    "  out_file: The path to the output file\n"
+  );
+
+  return -1;
+}
+
+int main(int argc, char **argv) {
+  struct options opts;
+  if (get_options(argc, argv, &opts) == -1) {
+    return -1;
+  }
+
   double _Complex *values = nullptr;
   FILE *fp = nullptr;
   png_structp png_ptr = nullptr;
@@ -191,12 +276,12 @@ int main(void) {
   png_bytepp row_ptr = nullptr;
   double max_abs;
 
-  int result = calculate_values("conj(z)", &values, &max_abs);
+  int result = calculate_values(opts.s, opts.width, opts.height, &values, &max_abs);
   if (result != 0) {
     goto cleanup;
   }
 
-  fp = fopen("test.png", "wb");
+  fp = fopen(opts.out_file, "wb");
   if (fp == nullptr) {
     result = -1;
     goto cleanup;
@@ -221,7 +306,7 @@ int main(void) {
   }
 
   if (setjmp(png_jmpbuf(png_ptr))) {
-    fprintf(stderr, "Error writing PNG");
+    fprintf(stderr, "Error writing PNG\n");
     result = -1;
     goto cleanup;
   }
@@ -231,8 +316,8 @@ int main(void) {
   png_set_IHDR(
     png_ptr,
     info_ptr,
-    width,
-    height,
+    opts.width,
+    opts.height,
     8,
     PNG_COLOR_TYPE_RGB,
     PNG_INTERLACE_NONE,
@@ -242,7 +327,7 @@ int main(void) {
 
   png_write_info(png_ptr, info_ptr);
 
-  row_ptr = build_image_data(width, height, max_abs, values);
+  row_ptr = build_image_data(opts.width, opts.height, max_abs, values);
   if (row_ptr == nullptr) {
     result = -1;
     goto cleanup;
@@ -253,7 +338,7 @@ int main(void) {
 
 cleanup:
 
-  free_image_data(row_ptr, height);
+  free_image_data(row_ptr, opts.height);
   png_destroy_write_struct(&png_ptr, &info_ptr);
   fclose(fp);
   free(values);
