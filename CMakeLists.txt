@@ -3,7 +3,11 @@ cmake_minimum_required(VERSION 3.28)
 project(ComplexGraph)
 
 add_executable(complex-graph)
-target_link_libraries(complex-graph PRIVATE m)
+find_package(PNG)
+target_link_libraries(complex-graph
+  PRIVATE m
+  PRIVATE PNG::PNG
+)
 set_property(TARGET complex-graph PROPERTY C_STANDARD 23)
 set_property(TARGET complex-graph PROPERTY COMPILE_WARNING_AS_ERROR ON)
 

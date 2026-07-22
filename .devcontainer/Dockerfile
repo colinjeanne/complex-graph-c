@@ -2,7 +2,5 @@
 FROM ubuntu:latest
 
 # Update apps on the base image
-RUN apt-get -y update && apt-get install -y
-
-# Install the Clang compiler
-RUN apt-get -y install clang cmake git-all lldb llvm
+RUN apt-get -y update && apt-get install -y && apt-get clean && \
+  apt-get -y install clang cmake git-all lldb llvm libpng-dev

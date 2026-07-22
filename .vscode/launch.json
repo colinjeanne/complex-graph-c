@@ -6,7 +6,6 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/debug/complex-graph",
       "args": [],
-      "cwd": "${fileDirname}",
       "disableASLR": false,
       "initCommands": [
         "settings set target.disable-aslr false"
@@ -19,7 +18,6 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/debug/complex-graph-test",
       "args": [],
-      "cwd": "${fileDirname}",
       "disableASLR": false,
       "initCommands": [
         "settings set target.disable-aslr false"
