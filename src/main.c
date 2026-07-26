@@ -2,8 +2,10 @@
 #include <ctype.h>
 #include <math.h>
 #include <setjmp.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <png.h>
 #include <unistd.h>
 
@@ -22,6 +24,7 @@ typedef unsigned int rgb;
 #define SET_GREEN(c, green) ((c & ~GREEN) | ((green) << 8))
 #define SET_BLUE(c, blue) ((c & ~BLUE) | (blue))
 
+#define PI 3.141592653589793238462643383279
 #define TAU 6.283185307179586476925286766559
 #define PI_OVER_3 1.0471975511965977461542144610932
 
@@ -33,6 +36,10 @@ double clamp(double d) {
   }
 
   return d;
+}
+
+double interpolate(double t, double start, double end) {
+  return t * (end - start) + start;
 }
 
 rgb hsl_to_rgb(double h, double s, double v) {
@@ -88,48 +95,125 @@ rgb hsl_to_rgb(double h, double s, double v) {
   return color;
 }
 
-int calculate_values(const char *s, int width, int height, double _Complex **values, double *max_abs) {
-  struct expression *ex = nullptr;
-  *values = nullptr;
+enum contour_mode {
+  CONTOURS_NONE      = 0x00,
+  CONTOURS_MAGNITUDE = 0x01,
+  CONTOURS_PHASE     = 0x02,
+  CONTOURS_BOTH      = 0x03,
+};
 
-  struct parse_result result = make_expression(s, &ex);
-  if (result.type != PARSE_ERROR_SUCCESS) {
-    printf("Bad expression");
-    free_expression(ex);
-    return -1;
-  }
+struct options {
+  int width;
+  int height;
+  char *s;
+  char *out_file;
+  enum contour_mode contours;
+  double top;
+  double left;
+  double bottom;
+  double right;
+};
 
-  struct variable_value variables[1] = {
-    MAKE_VARIABLE_VALUE("z", 0)
-  };
+struct precalculated_complex {
+  double _Complex value;
+  double phase;
+  double magnitude;
+};
 
-  *values = malloc(sizeof(double _Complex) * width * height);
-  if (*values == nullptr) {
-    free_expression(ex);
-    return -1;
-  }
+void calculate_row(
+  struct precalculated_complex *values,
+  struct expression *ex,
+  size_t pixel_width,
+  size_t samples,
+  double min_real,
+  double max_real,
+  double imag
+) {
+  struct variable_value variable = MAKE_VARIABLE_VALUE("z", 0);
 
-  *max_abs = 0;
-  for (int row = 0; row < height; ++row) {
-    for (int col = 0; col < width; ++col) {
-      variables[0].value = (col - width / 2) / 10.0 + I * (row - height / 2) / 10.0;
-      double complex r;
-      struct eval_result ev_result = evaluate_expression(ex, variables, 1, &r);
-      if (ev_result.type != EVAL_ERROR_SUCCESS) {
-        r = 0;
-      }
+  size_t pixel_samples = pixel_width * samples;
+  for (size_t sample = 0; sample < pixel_samples; ++sample) {
+    double real = interpolate(((double)sample) / pixel_samples, min_real, max_real);
+    variable.value = real + imag * I;
 
-      if (cabs(r) > *max_abs) {
-        *max_abs = r;
-      }
-      
-      (*values)[col + row * width] = r;
+    double _Complex u;
+    struct eval_result ev_result = evaluate_expression(ex, &variable, 1, &u);
+    if (ev_result.type != EVAL_ERROR_SUCCESS) {
+      u = 0;
     }
+
+    struct precalculated_complex pc = { u, carg(u), cabs(u) };
+    values[sample] = pc;
+  }
+}
+
+rgb color_sample(
+  struct precalculated_complex pc,
+  double real_span,
+  enum contour_mode mode
+) {
+  double hue = pc.phase;
+  double sat = 1;
+  double lum = 1 - pow(0.5, pc.magnitude);
+
+  double shading = 1;
+
+  double phase_lines = 12.0;
+  double target_lines = 5.0;
+  double raw_step = abs(real_span) / target_lines;
+  double density = pow(10, floor(log10(raw_step)));
+  
+  double line_thickness = 2.5;
+
+  if (mode & CONTOURS_MAGNITUDE) {
+    double v = log(pc.magnitude) / density;
+    double frac = v - floor(v);
+
+    shading *= interpolate(frac, 0.8, 1);
   }
 
-  free_expression(ex);
+  if (mode & CONTOURS_PHASE) {
+    double v = pc.phase / TAU * phase_lines;
+    double frac = v - floor(v);
+    shading *= interpolate(frac, 0.8, 1);
+  }
 
-  return 0;
+  return hsl_to_rgb(hue, sat, lum * shading);
+}
+
+void color_row(
+  png_bytep row_data,
+  struct precalculated_complex **values,
+  size_t width,
+  size_t samples,
+  double real_span,
+  enum contour_mode mode
+) {
+  double sample_weight = 1.0 / (samples * samples);
+
+  for (int col = 0; col < width; ++col) {
+    png_bytep p = &row_data[col * 3];
+
+    size_t base_sample = col * samples;
+
+    int total_r = 0;
+    int total_g = 0;
+    int total_b = 0;
+    for (int sy = 0; sy < samples; ++sy) {
+      for (int sx = 0; sx < samples; ++sx) {
+        struct precalculated_complex pc = values[sy][sx + base_sample];
+
+        rgb sample_color = color_sample(pc, real_span, mode);
+        total_r += GET_RED(sample_color);
+        total_g += GET_GREEN(sample_color);
+        total_b += GET_BLUE(sample_color);
+      }
+    }
+
+    p[0] = (unsigned char)(total_r * sample_weight);
+    p[1] = (unsigned char)(total_g * sample_weight);
+    p[2] = (unsigned char)(total_b * sample_weight);
+  }
 }
 
 void free_image_data(png_bytepp data, int height) {
@@ -146,40 +230,66 @@ void free_image_data(png_bytepp data, int height) {
   free(data);
 }
 
-png_bytepp build_image_data(
-  int width,
-  int height,
-  double max_abs,
-  const double _Complex *values
-) {
-  int row_bytes = width * 3;
-  png_bytepp row_ptr = calloc(height, sizeof(png_bytep));
+png_bytepp build_image_data(struct options opts, struct expression *ex) {
+  png_bytepp row_ptr = nullptr;
+  size_t samples = 3;
+  struct precalculated_complex *values[samples] = {};
+
+  int row_bytes = opts.width * 3;
+  row_ptr = calloc(opts.height, sizeof(png_bytep));
   if (row_ptr == nullptr) {
-    return nullptr;
+    goto cleanup;
   }
 
-  for (int row = 0; row < height; ++row) {
+  for (size_t row = 0; row < opts.height; ++row) {
     row_ptr[row] = malloc(row_bytes);
     if (row_ptr[row] == nullptr) {
-      free_image_data(row_ptr, height);
-      return nullptr;
+      goto cleanup;
     }
   }
 
-  for (int row = 0; row < height; ++row) {
-    png_bytep row_data = row_ptr[row];
-    for (int col = 0; col < width; ++col) {
-      png_bytep p = &row_data[col * 3];
-
-      double _Complex r = values[col + row * width];
-      rgb color = hsl_to_rgb(carg(r), cabs(r) / max_abs, 1.0);
-      p[0] = GET_RED(color);
-      p[1] = GET_GREEN(color);
-      p[2] = GET_BLUE(color);
+  for (size_t row = 0; row < samples; ++row) {
+    values[row] = malloc(sizeof(struct precalculated_complex) * opts.width * samples);
+    if (values[row] == nullptr) {
+      goto cleanup;
     }
+  }
+
+  double real_span = abs(opts.right - opts.left);
+  double imag_span = abs(opts.bottom - opts.top);
+  size_t pixel_samples = opts.height * samples;
+  for (size_t row = 0; row < opts.height; ++row) {
+    png_bytep row_data = row_ptr[row];
+
+    double base_sample = row * samples;
+    for (size_t sample = 0; sample < samples; ++sample) {
+      calculate_row(
+        values[sample],
+        ex,
+        opts.width,
+        samples,
+        opts.left,
+        opts.right,
+        interpolate((base_sample + sample) / pixel_samples, opts.top, opts.bottom)
+      );
+    }
+
+    color_row(row_data, values, opts.width, samples, real_span, opts.contours);
+  }
+
+  for (size_t row = 0; row < samples; ++row) {
+    free(values[row]);
   }
 
   return row_ptr;
+
+  cleanup:
+  for (size_t row = 0; row < samples; ++row) {
+    free(values[row]);
+  }
+  free_image_data(row_ptr, opts.height);
+
+  return nullptr;
 }
 
 int parse_positive_int(const char *s) {
@@ -196,21 +306,19 @@ int parse_positive_int(const char *s) {
   return i;
 }
 
-struct options {
-  int width;
-  int height;
-  char *s;
-  char *out_file;
-};
-
 int get_options(int argc, char **argv, struct options *opts) {
   opts->width = -1;
   opts->height = -1;
   opts->s = nullptr;
   opts->out_file = nullptr;
+  opts->contours = CONTOURS_NONE;
+  opts->top = 5;
+  opts->left = -5;
+  opts->bottom = -5;
+  opts->right = 5;
 
   int opt;
-  while ((opt = getopt(argc, argv, "w:h:f:")) != -1) {
+  while ((opt = getopt(argc, argv, "c:m:w:h:f:")) != -1) {
     switch (opt) {
       case 'w':
         opts->width = parse_positive_int(optarg);
@@ -230,6 +338,21 @@ int get_options(int argc, char **argv, struct options *opts) {
       
       case 'f':
         opts->s = optarg;
+        break;
+      
+      case 'c':
+        if (strcmp(optarg, "none") == 0) {
+          opts->contours = CONTOURS_NONE;
+        } else if (strcmp(optarg, "phase") == 0) {
+          opts->contours = CONTOURS_PHASE;
+        } else if (strcmp(optarg, "magnitude") == 0) {
+          opts->contours = CONTOURS_MAGNITUDE;
+        } else if (strcmp(optarg, "both") == 0) {
+          opts->contours = CONTOURS_BOTH;
+        } else {
+          fprintf(stderr, "Invalid contour mode: %s\n", optarg);
+          goto usage;
+        }
         break;
       
       default:
@@ -253,11 +376,13 @@ int get_options(int argc, char **argv, struct options *opts) {
   usage:
   fprintf(
     stderr,
-    "Usage: complex-graph -w width -h height -f function out_file\n"
-    "  w:        The width of the image in pixels\n"
-    "  h:        The height of the image in pixels\n"
-    "  f:        The function to graph in the variable z\n"
-    "  out_file: The path to the output file\n"
+    "complex-graph [-c mode] [-m mode] -w width -h height -f function path\n"
+    "  c:     The contour mode; one of\n"
+    "           none, phase, magnitude, or both\n"
+    "  w:     The width of the image in pixels\n"
+    "  h:     The height of the image in pixels\n"
+    "  f:     The function to graph in the variable z\n"
+    "  path:  The path to the output file\n"
   );
 
   return -1;
@@ -269,15 +394,17 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  double _Complex *values = nullptr;
   FILE *fp = nullptr;
   png_structp png_ptr = nullptr;
   png_infop info_ptr = nullptr;
   png_bytepp row_ptr = nullptr;
-  double max_abs;
+  struct expression *ex = nullptr;
+  int result = 0;
 
-  int result = calculate_values(opts.s, opts.width, opts.height, &values, &max_abs);
-  if (result != 0) {
+  struct parse_result ex_result = make_expression(opts.s, &ex);
+  if (ex_result.type != PARSE_ERROR_SUCCESS) {
+    fprintf(stderr, "Bad expression\n");
+    result = -1;
     goto cleanup;
   }
 
@@ -327,7 +454,7 @@ int main(int argc, char **argv) {
 
   png_write_info(png_ptr, info_ptr);
 
-  row_ptr = build_image_data(opts.width, opts.height, max_abs, values);
+  row_ptr = build_image_data(opts, ex);
   if (row_ptr == nullptr) {
     result = -1;
     goto cleanup;
@@ -338,10 +465,10 @@ int main(int argc, char **argv) {
 
 cleanup:
 
+  free_expression(ex);
   free_image_data(row_ptr, opts.height);
   png_destroy_write_struct(&png_ptr, &info_ptr);
   fclose(fp);
-  free(values);
 
   return result;
 }
