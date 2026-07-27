@@ -108,6 +108,7 @@ struct options {
   char *s;
   char *out_file;
   enum contour_mode contours;
+  char *domain;
   double top;
   double left;
   double bottom;
@@ -378,6 +379,7 @@ int get_options(int argc, char **argv, struct options *opts) {
   opts->s = nullptr;
   opts->out_file = nullptr;
   opts->contours = CONTOURS_NONE;
+  opts->domain = nullptr;
   opts->top = 0;
   opts->left = 0;
   opts->bottom = 0;
@@ -426,6 +428,8 @@ int get_options(int argc, char **argv, struct options *opts) {
           fprintf(stderr, "Invalid domain: %s\n", optarg);
           goto usage;
         }
+
+        opts->domain = optarg;
         break;
       
       default:
@@ -529,6 +533,22 @@ int main(int argc, char **argv) {
     PNG_INTERLACE_NONE,
     PNG_COMPRESSION_TYPE_DEFAULT,
     PNG_FILTER_TYPE_DEFAULT
+  );
+
+  png_text txt_data[2] = {};
+  txt_data[0].compression = PNG_TEXT_COMPRESSION_NONE;
+  txt_data[0].key = "Function";
+  txt_data[0].text = opts.s;
+
+  txt_data[1].compression = PNG_TEXT_COMPRESSION_NONE;
+  txt_data[1].key = "Domain";
+  txt_data[1].text = opts.domain;
+
+  png_set_text(
+    png_ptr,
+    info_ptr,
+    txt_data,
+    sizeof(txt_data) / sizeof(png_text)
   );
 
   png_write_info(png_ptr, info_ptr);
