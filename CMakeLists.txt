@@ -16,6 +16,8 @@ target_sources(complex-graph
     src/main.c
     src/deque.c
     src/expression.c
+    src/options.c
+    src/write_png.c
 )
 
 add_executable(complex-graph-test)
