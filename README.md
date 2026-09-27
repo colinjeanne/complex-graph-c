@@ -117,23 +117,32 @@ complex-graph [-c mode] -d domain -w width -h height -f function path
   d:     The domain of the function formatted as the top left and
            bottom right corners of the domain separated by a semicolon
            For example: -5 + 5i;5 -5i
-           Supports the same expression syntax as -f
+           Supports the same expression syntax as -f only in the variable z
   w:     The width of the image in pixels
   h:     The height of the image in pixels
   f:     The function to graph in the variable z
-  path:  The path to the output file
+  s:     The number of steps the variable t takes
+           Defaults to 1
+           Steps are equally spaced on the range [0, 1]
+           Each step produces an image with the name step{0..}.png
+  path:  The path to the output file or directory
 ```
 
 ## API
 
 The primary object the API works with is `struct expression`, an opaque type that represents a parsed expression. These are allocated using `make_expression` and freed with `free_expression`.
 
-Expressions are evaluated using `evaluate_expression`. All variables must have an assigned value when evaulating an expression. Variable values are defined using an array of `struct variable_value` with the `MAKE_VARIABLE_VALUE` macro used as a helper.
+Expressions are evaluated using `evaluate_expression`. All variables must have an assigned value when evaulating an expression. Variable values are defined using an array of `struct variables` with the `MAKE_VARIABLE_VALUE` macro used as a helper if you are building this structure yourself. `malloc_variables` can be used to build this structure from an existing expression.
 
 For example
 ```
-struct variable_value variables[] = {
+struct variable_value values[] = {
   MAKE_VARIABLE_VALUE("x", 3 + I),
+};
+
+struct variables vars = {
+  sizeof(values) / sizeof(struct variable_value),
+  values
 };
 
 struct expression *ex;
@@ -143,7 +152,7 @@ if (pr.type != PARSE_RESULT_SUCCESS) {
 }
 
 double _Complex result;
-struct eval_result er = evaluate_expression(ex, variables, 1, &result);
+struct eval_result er = evaluate_expression(ex, &vars, &result);
 if (er.type != EVAL_ERROR_SUCCESS) {
   ...
 }
