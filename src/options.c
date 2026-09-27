@@ -50,7 +50,7 @@ int parse_domain(const char *s, struct options *opts) {
   }
 
   double _Complex u;
-  struct eval_result ev = evaluate_expression(ex, nullptr, 0, &u);
+  struct eval_result ev = evaluate_expression(ex, nullptr, &u);
   if (ev.type != EVAL_ERROR_SUCCESS) {
     result = -1;
     goto cleanup;
@@ -68,7 +68,7 @@ int parse_domain(const char *s, struct options *opts) {
     goto cleanup;
   }
 
-  ev = evaluate_expression(ex, nullptr, 0, &u);
+  ev = evaluate_expression(ex, nullptr, &u);
   if (ev.type != EVAL_ERROR_SUCCESS) {
     result = -1;
     goto cleanup;
@@ -93,7 +93,8 @@ int get_options(int argc, char **argv, struct options *opts) {
   opts->width = -1;
   opts->height = -1;
   opts->s = nullptr;
-  opts->out_file = nullptr;
+  opts->out_path = nullptr;
+  opts->step_count = 1;
   opts->contours = CONTOURS_NONE;
   opts->domain = nullptr;
   opts->top = 0;
@@ -102,7 +103,7 @@ int get_options(int argc, char **argv, struct options *opts) {
   opts->right = 0;
 
   int opt;
-  while ((opt = getopt(argc, argv, "c:d:m:w:h:f:")) != -1) {
+  while ((opt = getopt(argc, argv, "c:d:m:w:h:f:s:")) != -1) {
     switch (opt) {
       case 'w':
         opts->width = parse_positive_int(optarg);
@@ -148,20 +149,28 @@ int get_options(int argc, char **argv, struct options *opts) {
         opts->domain = optarg;
         break;
       
+      case 's':
+        opts->step_count = parse_positive_int(optarg);
+        if (opts->step_count <= 0) {
+          fprintf(stderr, "Invalid step count: %s\n", optarg);
+          goto usage;
+        }
+        break;
+      
       default:
         goto usage;
     }
   }
 
   if (optind == argc - 1) {
-    opts->out_file = argv[optind];
+    opts->out_path = argv[optind];
   }
 
   if (
     (opts->width > 0) &&
     (opts->height > 0) &&
     (opts->s != nullptr) &&
-    (opts->out_file != nullptr) &&
+    (opts->out_path != nullptr) &&
     (opts->top > opts->bottom) &&
     (opts->left < opts->right)
   ) {
@@ -171,18 +180,23 @@ int get_options(int argc, char **argv, struct options *opts) {
   usage:
   fprintf(
     stderr,
-    "complex-graph [-c mode] -d domain -w width -h height -f function path\n"
+    "complex-graph [-c mode][-s steps] -d domain -w width -h height -f function path\n"
+    "Render the complex graph of a function as a series of one or more images\n"
     "  c:     The contour mode; one of\n"
     "           none, phase, magnitude, or both\n"
     "           Defaults to none\n"
     "  d:     The domain of the function formatted as the top left and\n"
     "           bottom right corners of the domain separated by a semicolon\n"
     "           For example: -5 + 5i;5 -5i\n"
-    "           Supports the same expression syntax as -f\n"
+    "           Supports the same expression syntax as -f only in the variable z\n"
     "  w:     The width of the image in pixels\n"
     "  h:     The height of the image in pixels\n"
-    "  f:     The function to graph in the variable z\n"
-    "  path:  The path to the output file\n"
+    "  f:     The function to graph in the variables z and t\n"
+    "  s:     The number of steps the variable t takes\n"
+    "           Defaults to 1\n"
+    "           Steps are equally spaced on the range [0, 1]\n"
+    "           Each step produces an image with the name step{0..}.png\n"
+    "  path:  The path to the output file or directory\n"
   );
 
   return -1;

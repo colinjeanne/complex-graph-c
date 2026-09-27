@@ -12,7 +12,8 @@ struct options {
   int width;
   int height;
   char *s;
-  char *out_file;
+  char *out_path;
+  int step_count;
   enum contour_mode contours;
   char *domain;
   double top;

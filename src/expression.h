@@ -31,12 +31,17 @@ struct eval_result {
 };
 
 struct variable_value {
-  const char *symbol;
+  char *symbol;
   size_t len;
   double _Complex value;
 };
 
 #define MAKE_VARIABLE_VALUE(symbol, value) { (symbol), (sizeof(symbol) - 1), (value) }
+
+struct variables {
+  size_t count;
+  struct variable_value *values;
+};
 
 struct expression;
 
@@ -44,9 +49,13 @@ struct parse_result make_expression(const char *s, struct expression **ex);
 void free_expression(struct expression *ex);
 struct eval_result evaluate_expression(
   const struct expression *expression,
-  const struct variable_value *variables,
-  size_t variable_count,
+  const struct variables *vars,
   double _Complex *result
 );
+
+struct variables *malloc_variables(const struct expression *ex);
+void free_variables(struct variables *vars);
+bool has_variable(const struct variables *vars, const char *symbol);
+int set_variable(struct variables *vars, const char *symbol, double _Complex value);
 
 #endif
