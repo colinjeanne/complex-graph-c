@@ -173,3 +173,12 @@ Run `complex-graph-test` to validate tests pass.
 ### Visual Studio Code
 
 This project includes a development container with the packages necessary for building and debugging the project. It is recommended that the ![LLDB DAP](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.lldb-dap) extension be installed into the remote container.
+
+The development container includes `ffmpeg` to so that videos can be produced. For example
+
+```
+complex-graph -c both -d "-3 + 3i;3 - 3i" -w 400 -h 400 -f "(z - 1 + (i - 1)t)(z + 2*exp(pi*t*i/4))/(z + 2exp(2*pi*i*t))" -s 60 images
+ffmpeg -framerate 20 -i images/step_%03d.png -c:v libx264 -pix_fmt yuv420p output.mp4
+```
+
+[![Example video](example_video.mp4)]
