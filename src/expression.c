@@ -642,8 +642,7 @@ struct expression *malloc_number_expression(double _Complex value, size_t start_
 
 struct eval_result evaluate_number_expression(
   const struct expression *ex,
-  const struct variable_value *variables,
-  size_t variable_count,
+  const struct variables *vars,
   double _Complex *result
 ) {
   *result = ex->value;
@@ -672,16 +671,16 @@ struct expression *malloc_variable_expression(const char *s, size_t start_index,
 
 struct eval_result evaluate_variable_expression(
   const struct expression *ex,
-  const struct variable_value *variables,
-  size_t variable_count,
+  const struct variables *vars,
   double _Complex *result
 ) {
-  for (size_t i = 0; i < variable_count; ++i) {
+  size_t count = vars == nullptr ? 0 : vars->count;
+  for (size_t i = 0; i < count; ++i) {
     if (
-      (ex->len == variables[i].len) &&
-      (strncmp(ex->symbol, variables[i].symbol, ex->len) == 0)
+      (ex->len == vars->values[i].len) &&
+      (strncmp(ex->symbol, vars->values[i].symbol, ex->len) == 0)
     ) {
-      *result = variables[i].value;
+      *result = vars->values[i].value;
       return SUCCESS_EVAL_RESULT;
     }
   }
@@ -713,15 +712,13 @@ struct expression *malloc_binary_operation_expression(
 
 struct eval_result evaluate_binary_operation_expression(
   const struct expression *ex,
-  const struct variable_value *variables,
-  size_t variable_count,
+  const struct variables *vars,
   double _Complex *result
 ) {
   double _Complex left_value;
   struct eval_result ev_result = evaluate_expression(
     ex->left_child,
-    variables,
-    variable_count,
+    vars,
     &left_value
   );
 
@@ -732,8 +729,7 @@ struct eval_result evaluate_binary_operation_expression(
   double _Complex right_value;
   ev_result = evaluate_expression(
     ex->right_child,
-    variables,
-    variable_count,
+    vars,
     &right_value
   );
 
@@ -767,15 +763,13 @@ struct expression *malloc_unary_operation_expression(
 
 struct eval_result evaluate_unary_operation_expression(
   const struct expression *ex,
-  const struct variable_value *variables,
-  size_t variable_count,
+  const struct variables *vars,
   double _Complex *result
 ) {
   double _Complex value;
   struct eval_result ev_result = evaluate_expression(
     ex->left_child,
-    variables,
-    variable_count,
+    vars,
     &value
   );
 
@@ -1255,43 +1249,186 @@ struct parse_result make_expression(const char *s, struct expression **ex) {
 
 struct eval_result evaluate_expression(
   const struct expression *ex,
-  const struct variable_value *variables,
-  size_t variable_count,
+  const struct variables *vars,
   double _Complex *result
 ) {
   switch (ex->type) {
     case EX_BINARY_OPERATION:
       return evaluate_binary_operation_expression(
         ex,
-        variables,
-        variable_count,
+        vars,
         result
       );
 
     case EX_NUMBER:
       return evaluate_number_expression(
         ex,
-        variables,
-        variable_count,
+        vars,
         result
       );
     
     case EX_UNARY_OPERATION:
       return evaluate_unary_operation_expression(
         ex,
-        variables,
-        variable_count,
+        vars,
         result
       );
     
     case EX_VARIABLE:
       return evaluate_variable_expression(
         ex,
-        variables,
-        variable_count,
+        vars,
         result
       );
   }
 
   return SUCCESS_EVAL_RESULT;
+}
+
+bool is_known_variable(struct deque *known_variables, const char *symbol, size_t len) {
+  struct iterator it = iterator_for(known_variables);
+  for (it; !is_end_iterator(it); iterator_next(&it)) {
+    const char *known_symbol = iterator_data(it);
+    if (strncmp(known_symbol, symbol, len) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+int get_variables(const struct expression *ex, struct deque *known_variables) {
+  char *symbol = nullptr;
+  int result = 0;
+
+  switch (ex->type) {
+    case EX_BINARY_OPERATION:
+      result = get_variables(ex->left_child, known_variables);
+      if (result != 0) {
+        goto cleanup;
+      }
+
+      result = get_variables(ex->right_child, known_variables);
+      if (result != 0) {
+        goto cleanup;
+      }
+      break;
+
+    case EX_UNARY_OPERATION:
+      result = get_variables(ex->operand, known_variables);
+      if (result != 0) {
+        goto cleanup;
+      }
+      break;
+    
+    case EX_VARIABLE:
+      if (is_known_variable(known_variables, ex->symbol, ex->len)) {
+        break;
+      }
+
+      symbol = strndup(ex->symbol, ex->len);
+      if (symbol == nullptr) {
+        result = -1;
+        goto cleanup;
+      }
+
+      result = deque_push_back(known_variables, symbol);
+      if (result != 0) {
+        goto cleanup;
+      }
+      break;
+  }
+
+  cleanup:
+  if (result != 0) {
+    free(symbol);
+  }
+
+  return result;
+}
+
+struct variables *malloc_variables(const struct expression *ex) {
+  struct deque *known_variables = nullptr;
+  struct variables *vars = nullptr;
+  int result = 0;
+
+  known_variables = malloc_deque(free);
+  if (known_variables == nullptr) {
+    result = -1;
+    goto cleanup;
+  }
+
+  result = get_variables(ex, known_variables);
+  if (result != 0) {
+    goto cleanup;
+  }
+
+  vars = malloc(sizeof(struct variables));
+  if (vars == nullptr) {
+    goto cleanup;
+  }
+
+  vars->count = deque_len(known_variables);
+  if (vars->count == 0) {
+    vars->values = nullptr;
+    goto cleanup;
+  }
+
+  vars->values = malloc(sizeof(struct variable_value) * vars->count);
+  if (vars->values == nullptr) {
+    goto cleanup;
+  }
+
+  size_t index = 0;
+  while (deque_len(known_variables) > 0) {
+    vars->values[index].symbol = deque_pop_front(known_variables);
+    vars->values[index].len = strlen(vars->values[index].symbol);
+    vars->values[index].value = 0;
+    ++index;
+  }
+
+  cleanup:
+  free_deque(known_variables);
+
+  if (result != 0) {
+    free(vars);
+    vars = nullptr;
+  }
+
+  return vars;
+}
+
+void free_variables(struct variables *vars) {
+  if (vars == nullptr) {
+    return;
+  }
+
+  for (size_t i = 0; i < vars->count; ++i) {
+    free(vars->values[i].symbol);
+  }
+
+  free(vars->values);
+  free(vars);
+}
+
+bool has_variable(const struct variables *vars, const char *symbol) {
+  for (size_t i = 0; i < vars->count; ++i) {
+    struct variable_value v = vars->values[i];
+    if (strncmp(vars->values[i].symbol, symbol, vars->values[i].len) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+int set_variable(struct variables *vars, const char *symbol, double _Complex value) {
+  for (size_t i = 0; i < vars->count; ++i) {
+    if (strncmp(vars->values[i].symbol, symbol, vars->values[i].len) == 0) {
+      vars->values[i].value = value;
+      return 0;
+    }
+  }
+
+  return -1;
 }

@@ -4,6 +4,11 @@
 #include "expression.h"
 #include "options.h"
 
-int write_png(struct options opts, struct expression *ex);
+int write_png(
+    const char *out_file,
+    struct options opts,
+    struct expression *ex,
+    struct variables *vars
+);
 
 #endif

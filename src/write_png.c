@@ -99,24 +99,28 @@ struct precalculated_complex {
   double magnitude;
 };
 
-void calculate_row(
+int calculate_row(
   struct precalculated_complex *values,
   struct expression *ex,
+  struct variables *vars,
   size_t pixel_width,
   size_t samples,
   double min_real,
   double max_real,
   double imag
 ) {
-  struct variable_value variable = MAKE_VARIABLE_VALUE("z", 0);
+  int result = 0;
 
   size_t pixel_samples = pixel_width * samples;
   for (size_t sample = 0; sample < pixel_samples; ++sample) {
     double real = interpolate(((double)sample) / pixel_samples, min_real, max_real);
-    variable.value = real + imag * I;
+    result = set_variable(vars, "z", real + imag * I);
+    if (result != 0) {
+      break;
+    }
 
     double _Complex u;
-    struct eval_result ev_result = evaluate_expression(ex, &variable, 1, &u);
+    struct eval_result ev_result = evaluate_expression(ex, vars, &u);
     if (ev_result.type != EVAL_ERROR_SUCCESS) {
       u = 0;
     }
@@ -124,6 +128,8 @@ void calculate_row(
     struct precalculated_complex pc = { u, carg(u), cabs(u) };
     values[sample] = pc;
   }
+
+  return result;
 }
 
 rgb color_sample(
@@ -209,7 +215,7 @@ void free_image_data(png_bytepp data, int height) {
   free(data);
 }
 
-png_bytepp build_image_data(struct options opts, struct expression *ex) {
+png_bytepp build_image_data(struct options opts, struct expression *ex, struct variables *vars) {
   png_bytepp row_ptr = nullptr;
   size_t samples = 3;
   struct precalculated_complex *values[samples] = {};
@@ -242,15 +248,20 @@ png_bytepp build_image_data(struct options opts, struct expression *ex) {
 
     double base_sample = row * samples;
     for (size_t sample = 0; sample < samples; ++sample) {
-      calculate_row(
+      int result = calculate_row(
         values[sample],
         ex,
+        vars,
         opts.width,
         samples,
         opts.left,
         opts.right,
         interpolate((base_sample + sample) / pixel_samples, opts.top, opts.bottom)
       );
+
+      if (result != 0) {
+        goto cleanup;
+      }
     }
 
     color_row(row_data, values, opts.width, samples, real_span, opts.contours);
@@ -271,15 +282,16 @@ png_bytepp build_image_data(struct options opts, struct expression *ex) {
   return nullptr;
 }
 
-int write_png(struct options opts, struct expression *ex) {
+int write_png(const char *out_file, struct options opts, struct expression *ex, struct variables *vars) {
   FILE *fp = nullptr;
   png_structp png_ptr = nullptr;
   png_infop info_ptr = nullptr;
   png_bytepp row_ptr = nullptr;
   int result = 0;
 
-  fp = fopen(opts.out_file, "wb");
+  fp = fopen(out_file, "wb");
   if (fp == nullptr) {
+    fprintf(stderr, "Unable to open file %s\n", out_file);
     result = -1;
     goto cleanup;
   }
@@ -339,7 +351,7 @@ int write_png(struct options opts, struct expression *ex) {
 
   png_write_info(png_ptr, info_ptr);
 
-  row_ptr = build_image_data(opts, ex);
+  row_ptr = build_image_data(opts, ex, vars);
   if (row_ptr == nullptr) {
     result = -1;
     goto cleanup;
@@ -352,7 +364,10 @@ cleanup:
 
   free_image_data(row_ptr, opts.height);
   png_destroy_write_struct(&png_ptr, &info_ptr);
-  fclose(fp);
+
+  if (fp != nullptr) {
+    fclose(fp);
+  }
 
   return result;
 }
