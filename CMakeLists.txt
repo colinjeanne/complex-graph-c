@@ -27,7 +27,9 @@ set_property(TARGET complex-graph-test PROPERTY COMPILE_WARNING_AS_ERROR ON)
 
 target_sources(complex-graph-test
   PRIVATE
+    test/expression_test.c
     test/main.c
+    test/variable_test.c
     src/deque.c
     src/expression.c
 )
