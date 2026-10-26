@@ -21,11 +21,11 @@ struct variables empty_vars = { 0, nullptr };
 #define EVAL_ERROR_TEST_CASE(ex, type, index, vars) { (ex), (vars), PARSE_ERROR_SUCCESS, (type), (index) }
 #define SUCCESS_TEST_CASE(ex, vars, value) { (ex), (vars), PARSE_ERROR_SUCCESS, EVAL_ERROR_SUCCESS, 0, (value) }
 
-const double EPISON = 0.000001;
+const double EPSILON = 0.000001;
 
-int are_equal(double _Complex u, double _Complex v) {
-  return fabs(creal(u) - creal(v)) < EPISON &&
-    fabs(cimag(u) - cimag(v)) < EPISON;
+bool are_equal(double _Complex u, double _Complex v) {
+  return fabs(creal(u) - creal(v)) < EPSILON &&
+    fabs(cimag(u) - cimag(v)) < EPSILON;
 }
 
 int run_test_case(struct test_case c) {
