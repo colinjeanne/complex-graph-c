@@ -16,6 +16,7 @@ target_sources(complex-graph
     src/main.c
     src/deque.c
     src/expression.c
+    src/interval.c
     src/options.c
     src/write_png.c
 )
@@ -28,10 +29,12 @@ set_property(TARGET complex-graph-test PROPERTY COMPILE_WARNING_AS_ERROR ON)
 target_sources(complex-graph-test
   PRIVATE
     test/expression_test.c
+    test/interval_test.c
     test/main.c
     test/variable_test.c
     src/deque.c
     src/expression.c
+    src/interval.c
 )
 
 target_include_directories(complex-graph-test
